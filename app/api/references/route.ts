@@ -1,11 +1,15 @@
 import { isArcadeMock, uploadReferenceImage } from "@/lib/arcade";
-import { parseDataUrl, prepareImage } from "@/lib/images";
+import { isSvgSource, parseDataUrl, prepareImage, svgSourceToPng } from "@/lib/images";
 import { MAX_REFERENCE_IMAGES } from "@/lib/limits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 async function loadImage(src: string): Promise<{ bytes: Buffer; mediaType: string } | null> {
+  if (isSvgSource(src)) {
+    const png = await svgSourceToPng(src);
+    return png ? { bytes: png, mediaType: "image/png" } : null;
+  }
   if (src.startsWith("data:")) {
     const parsed = parseDataUrl(src);
     return parsed ? { bytes: parsed.bytes, mediaType: parsed.mediaType } : null;

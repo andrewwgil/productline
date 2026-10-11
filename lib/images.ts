@@ -100,6 +100,42 @@ export async function prepareImages(images: RawImage[]): Promise<PreparedImage[]
   return prepared.filter((img): img is PreparedImage => img !== null);
 }
 
+const SVG_URL = /\.svg(?:$|[?#])/i;
+
+export function isSvgSource(src: string) {
+  return src.slice(0, 96).toLowerCase().startsWith("data:image/svg+xml") || SVG_URL.test(src);
+}
+
+async function bytesFromSource(src: string): Promise<Buffer | null> {
+  if (src.startsWith("data:")) {
+    const base64 = src.match(/^data:[^,]*;base64,([A-Za-z0-9+/=\s]+)$/);
+    if (base64) return Buffer.from(base64[1].replace(/\s/g, ""), "base64");
+    const raw = src.match(/^data:[^,]*,([\s\S]+)$/);
+    if (!raw) return null;
+    try { return Buffer.from(decodeURIComponent(raw[1])); } catch { return Buffer.from(raw[1]); }
+  }
+  if (!/^https?:\/\//i.test(src)) return null;
+  const res = await fetch(src, { headers: { "User-Agent": "Mozilla/5.0 productline" }, signal: AbortSignal.timeout(12000) });
+  if (!res.ok) return null;
+  const bytes = Buffer.from(await res.arrayBuffer());
+  return bytes.length > 8 * 1024 * 1024 ? null : bytes;
+}
+
+/** Rasterize an SVG URL or data URL to PNG. Claude and Arcade references cannot take SVG. */
+export async function svgSourceToPng(src: string): Promise<Buffer | null> {
+  try {
+    const bytes = await bytesFromSource(src);
+    if (!bytes) return null;
+    const png = await sharp(bytes, { density: 192, failOn: "none", limitInputPixels: 40_000_000 })
+      .resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true })
+      .png()
+      .toBuffer();
+    return png.length > 32 ? png : null;
+  } catch {
+    return null;
+  }
+}
+
 export function parseDataUrl(src: string): { mediaType: string; bytes: Buffer } | null {
   const match = src.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/);
   if (!match) return null;

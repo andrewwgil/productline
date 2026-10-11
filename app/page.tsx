@@ -20,6 +20,42 @@ function isImageFile(file: File) {
   return file.type.startsWith("image/") || IMAGE_FILE.test(file.name);
 }
 
+const STUDIO_PHASES = ["Sketching the repeats", "Scarves, pillows, and table linens", "A piece of jewelry", "Opening the store"];
+
+function voiceLines(taste: TasteProfile | null): string[] {
+  if (!taste) return ["The work is still deciding what it wants to become."];
+  const sentences = taste.voice.sample.split(/(?<=[.!?])\s+/).map((line) => line.trim()).filter(Boolean);
+  const motifs = taste.motifs.slice(0, 3).map((motif) => `${motif.charAt(0).toUpperCase()}${motif.slice(1)}.`);
+  return [...new Set([...sentences, taste.tagline, ...motifs])].slice(0, 6);
+}
+
+function Making({ taste }: { taste: TasteProfile | null }) {
+  const lines = voiceLines(taste);
+  const copy = lines.length ? lines : ["The line is on its way."];
+  const [phase, setPhase] = useState(0);
+  const [line, setLine] = useState(0);
+  useEffect(() => {
+    const rotate = setInterval(() => setLine((n) => (n + 1) % copy.length), 4500);
+    const steps = setInterval(() => setPhase((n) => Math.min(n + 1, STUDIO_PHASES.length - 1)), 18000);
+    return () => { clearInterval(rotate); clearInterval(steps); };
+  }, [copy.length]);
+  return (
+    <div className="mt-10 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+      <p className="text-xs uppercase tracking-[0.35em] text-orange-400">{taste ? taste.brandName : "In the studio"}</p>
+      <p key={copy[line]} aria-live="polite" className="voice-line mt-4 min-h-16 font-serif text-2xl leading-snug md:text-3xl">{copy[line]}</p>
+      <ol className="mt-6 space-y-3">
+        {STUDIO_PHASES.map((label, i) => (
+          <li key={label} className={`flex items-center gap-3 text-sm ${i > phase ? "text-neutral-600" : ""}`}>
+            <span className={`h-2.5 w-2.5 rounded-full ${i < phase ? "bg-green-400" : i === phase ? "animate-pulse bg-orange-400" : "bg-neutral-700"}`} />
+            {label}
+          </li>
+        ))}
+      </ol>
+      <p className="mt-5 text-xs text-neutral-500">Arcade is drawing the line. This usually takes a minute or two.</p>
+    </div>
+  );
+}
+
 function pickImages(list: FileList | File[]) {
   const images = [...list].filter(isImageFile);
   const files = [...images].sort((a, b) => b.size - a.size).slice(0, MAX_PORTFOLIO_IMAGES);
@@ -158,6 +194,7 @@ export default function Home() {
             })}
           </ol>
         )}
+        {step === "generate" && <Making taste={taste} />}
         {portfolio && step !== "idle" && <p className="mt-6 text-sm text-neutral-500">Found {portfolio.images.length} images on {portfolio.title}</p>}
         {taste && <div className="mt-4 flex gap-2">{taste.palette.map((c) => <span key={c.hex} title={c.name} className="h-8 w-8 rounded-full ring-1 ring-white/20" style={{ background: c.hex }} />)}</div>}
         {err && <p className="mt-6 rounded-lg bg-red-950 p-4 text-sm text-red-300">{err}</p>}

@@ -2,6 +2,7 @@ import { mockCall } from "./mock";
 import type { Category, CategoryDetail, Checkout, CreatePatternInput, Job, Order, Pattern, Product, RefineOp } from "./types";
 
 const BASE = process.env.ARCADE_BASE_URL ?? "https://platform.arcade.ai/v1";
+export const ARCADE_USER_AGENT = "productline/1.0";
 export const isArcadeMock = () => !process.env.ARCADE_API_KEY;
 export const rid = (p = "pl") => `${p}-${crypto.randomUUID()}`;
 
@@ -11,7 +12,7 @@ export async function call<T>(path: string, body: Record<string, unknown> = {}):
   if (isArcadeMock()) return (await mockCall(path, body)) as T;
   const res = await fetch(`${BASE}/${path}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.ARCADE_API_KEY}`, "Content-Type": "application/json", "User-Agent": "productline/0.1" },
+    headers: { Authorization: `Bearer ${process.env.ARCADE_API_KEY}`, "Content-Type": "application/json", "User-Agent": ARCADE_USER_AGENT },
     body: JSON.stringify(body),
     cache: "no-store",
   });
@@ -20,7 +21,7 @@ export async function call<T>(path: string, body: Record<string, unknown> = {}):
   return JSON.parse(text) as T;
 }
 
-export async function waitForJob(jobId: string, { intervalMs = isArcadeMock() ? 200 : 2500, timeoutMs = 5 * 60_000 } = {}): Promise<Job> {
+export async function waitForJob(jobId: string, { intervalMs = isArcadeMock() ? 200 : 3000, timeoutMs = 5 * 60_000 } = {}): Promise<Job> {
   const start = Date.now();
   for (;;) {
     const job = await call<Job>("jobs/get", { jobId });
@@ -78,6 +79,15 @@ export async function createProduct(patternId: string, categoryId: string, prefs
 }
 export const getProduct = (productId: string, quantity?: number) => call<Product>("products/get", { productId, ...(quantity ? { quantity } : {}) });
 
-export const createCheckout = (lines: { productId: string; quantity: number }[]) =>
-  call<Checkout>("checkouts/create", { requestId: rid("co"), lines, dropShip: lines.some((l) => l.quantity === 1) });
+/** Quantity 1 cannot check out unless dropShip is true. */
+export function checkoutBody(lines: { productId: string; quantity: number }[]) {
+  const dropShip = lines.some((line) => Number(line.quantity) === 1);
+  return { lines, dropShip };
+}
+
+export const createCheckout = (lines: { productId: string; quantity: number }[]) => {
+  const body = checkoutBody(lines);
+  if (body.lines.some((line) => Number(line.quantity) === 1) && body.dropShip !== true) throw new Error("quantity 1 requires dropShip: true");
+  return call<Checkout>("checkouts/create", { requestId: rid("co"), ...body });
+};
 export const getOrder = (q: { checkoutId?: string; orderId?: string }) => call<Order>("orders/get", q);

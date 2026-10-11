@@ -1,3 +1,4 @@
+import { isSvgSource, svgSourceToPng } from "./images";
 import { MAX_PORTFOLIO_IMAGES } from "./limits";
 import type { Portfolio, TasteProfile } from "./types";
 
@@ -5,18 +6,28 @@ export const isClaudeMock = () => !process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5";
 
 const SYSTEM = `You are a creative director turning an artist's portfolio into a product line brand.
-Return ONLY JSON matching: {"brandName":string,"tagline":string,"palette":[{"name":string,"hex":"#rrggbb"}] (5 colors, last = background),"motifs":string[] (4-6),"voice":{"adjectives":string[3],"sample":string (2 sentences in the artist's voice)},"patternPrompts":string[3] (Arcade print-pattern prompts, <300 chars, rich in motif/palette/technique),"jewelryPrompt":string,"preferredCategories":string[] (product types that fit, e.g. scarf, pillow, napkins, lampshade, rug)}`;
+Return ONLY JSON matching: {"brandName":string,"tagline":string,"palette":[{"name":string,"hex":"#rrggbb"}] (5 colors, last = background),"motifs":string[] (4-6),"voice":{"adjectives":string[3],"sample":string (2 sentences in the artist's voice)},"patternPrompts":string[3] (Arcade print-pattern prompts, <300 chars, rich in motif/palette/technique),"jewelryPrompt":string,"preferredCategories":string[]}. Arcade has no apparel: never ask for tees, hoodies, or jackets. For clothing, graphics, or streetwear, preferredCategories must be scarf, pillow, napkins or table linens, and lampshade.`;
 
 function visionBlock(src: string): unknown | null {
   const data = src.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
   if (data) return { type: "image", source: { type: "base64", media_type: data[1], data: data[2] } };
+  if (isSvgSource(src)) return null;
   if (/^https?:\/\//i.test(src)) return { type: "image", source: { type: "url", url: src } };
   return null;
 }
 
+async function visionBlocks(images: string[]): Promise<unknown[]> {
+  const blocks = await Promise.all(images.slice(0, MAX_PORTFOLIO_IMAGES).map(async (src) => {
+    if (!isSvgSource(src)) return visionBlock(src);
+    const png = await svgSourceToPng(src);
+    return png ? { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } } : null;
+  }));
+  return blocks.filter(Boolean);
+}
+
 export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
   if (isClaudeMock()) return mockTaste(p);
-  const content: unknown[] = p.images.slice(0, MAX_PORTFOLIO_IMAGES).map(visionBlock).filter(Boolean);
+  const content: unknown[] = await visionBlocks(p.images);
   content.push({ type: "text", text: `Portfolio: ${p.url}\nTitle: ${p.title}\nDescription: ${p.description}\nText: ${p.text.slice(0, 4000)}` });
   const call = async (withImages: boolean) => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {

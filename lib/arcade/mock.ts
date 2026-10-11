@@ -73,6 +73,8 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
     case "products/get":
       return store.products.get(String(body.productId)) ?? { productId: body.productId };
     case "checkouts/create": {
+      const lines = (body.lines as { quantity?: number }[] | undefined) ?? [];
+      if (lines.some((line) => Number(line.quantity) === 1) && body.dropShip !== true) throw new Error("quantity 1 requires dropShip: true");
       const checkoutId = String(Date.now());
       return { checkoutId, checkoutUrl: `/checkout/mock?checkoutId=${checkoutId}` };
     }

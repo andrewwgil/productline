@@ -14,7 +14,7 @@ npm run dev                  # http://localhost:3000
 ```
 
 ## Layout
-- `lib/arcade/`: typed client. Every request carries a `requestId`, jobs are polled through `jobs/get`, category IDs are looked up at runtime (resolved with `categories/get` before `products/create`), and refine and checkout are wrapped (`dropShip` is set automatically when quantity is 1). Falls back to `mock.ts` when `ARCADE_API_KEY` is unset.
+- `lib/arcade/`: typed client. Every request sends `User-Agent: productline/1.0` and a `requestId`. Jobs are polled through `jobs/get` every 3 seconds. Category IDs come from the live `categories/list` (apparel and graphic work maps to scarves, pillows, table linens, lampshades, and jewelry), and checkout sets `dropShip: true` whenever a line has quantity 1. Falls back to `mock.ts` when `ARCADE_API_KEY` is unset.
 - `lib/scrape.ts`, `lib/scrape-browser.ts`, `lib/images.ts`, `lib/taste.ts`, `lib/fal.ts`, `lib/collection.ts`: the pipeline steps.
 - `RESEARCH.md`: API notes, categories, demo ideas and the build plan.
 
