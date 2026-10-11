@@ -41,9 +41,32 @@ async function scrapeStatic(url: URL): Promise<Portfolio> {
   };
 }
 
+/** No-browser fallback: find artwork paths referenced inside the page's JS chunks. */
+async function withScriptImages(url: URL, current: Portfolio): Promise<Portfolio> {
+  try {
+    const html = await (await fetch(url.href, { headers: { "user-agent": "Mozilla/5.0 productline" } })).text();
+    const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => new URL(m[1], url).href).slice(0, 20);
+    const found = new Set<string>();
+    for (const src of scripts) {
+      const js = await (await fetch(src)).text().catch(() => "");
+      for (const m of js.matchAll(/["'](\/[^"'\s]+\.(?:svg|png|jpe?g|webp))["']/gi)) {
+        if (!/favicon|icon|logo-?sm|sprite/i.test(m[1])) found.add(new URL(m[1], url).href);
+      }
+    }
+    // one image per folder first so the pick spans the archive
+    const byDir = new Map<string, string>();
+    for (const f of found) { const d = f.split("/").slice(0, -1).join("/"); if (!byDir.has(d)) byDir.set(d, f); }
+    const ordered = [...new Set([...byDir.values(), ...found])];
+    if (!ordered.length) return current;
+    return { ...current, images: [...new Set([...ordered, ...current.images])].slice(0, RAW_IMAGE_CAP) };
+  } catch {
+    return current;
+  }
+}
+
 async function withRendered(url: URL, current: Portfolio): Promise<Portfolio> {
   if (!isThin(current)) return current;
-  if (process.env.VERCEL) return current; // no Chromium on Vercel functions
+  if (process.env.VERCEL) return withScriptImages(url, current); // no Chromium on Vercel functions
   try {
     const { scrapeRendered } = await import("./scrape-browser");
     const rendered = await scrapeRendered(url);
