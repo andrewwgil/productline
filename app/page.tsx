@@ -1,189 +1,218 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import heroProducts from "@/public/hero/products.json";
-import { MAX_PORTFOLIO_IMAGES, MAX_REFERENCE_IMAGES } from "@/lib/limits";
-import type { Collection, CollectionItem, Portfolio, TasteProfile } from "@/lib/types";
+import { MAX_PORTFOLIO_IMAGES } from "@/lib/limits";
+import type { ItemStatus } from "@/lib/line";
+import type { LinePlan, PlanItem, Portfolio, ProductCard } from "@/lib/types";
 
-type Step = "idle" | "scrape" | "taste" | "review" | "generate" | "done" | "error";
+type Stage = "start" | "pick" | "reading" | "review" | "line";
 type StyleModel = { modelId: string; name: string };
-const STEPS: [Step, string][] = [["scrape", "Reading your vision"], ["taste", "Distilling your taste"], ["generate", "Building the business"]];
-const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif)$/i;
-type FolderAttrs = React.InputHTMLAttributes<HTMLInputElement> & { webkitdirectory?: string; directory?: string };
+type Plan = LinePlan & { notice?: string };
+type Slot = { item: PlanItem; state: "starting" | "making" | "ready" | "failed"; jobId?: string; startedAt: number; product?: ProductCard; error?: string };
+
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif|heic)$/i;
+const ZIP_FILE = /\.zip$/i;
+const POLL_MS = 4000;
+const SAVE_KEY = "productline:line";
+type Saved = { plan: Plan; slots: Slot[]; images: string[]; referenceIds: (string | null)[] };
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const d = await r.json();
+  const d = await r.json().catch(() => ({}));
   if (!r.ok || d.error) throw new Error(d.error ?? r.statusText);
   return d;
 }
 
-function isImageFile(file: File) {
-  return file.type.startsWith("image/") || IMAGE_FILE.test(file.name);
-}
-
-const STUDIO_PHASES = ["Vision into repeats", "Scarves, pillows, linens", "Jewelry from that taste", "Opening the business"];
-
-function voiceLines(taste: TasteProfile | null): string[] {
-  if (!taste) return ["The work is still deciding what it wants to become."];
-  const sentences = taste.voice.sample.split(/(?<=[.!?])\s+/).map((line) => line.trim()).filter(Boolean);
-  const motifs = taste.motifs.slice(0, 3).map((motif) => `${motif.charAt(0).toUpperCase()}${motif.slice(1)}.`);
-  return [...new Set([...sentences, taste.tagline, ...motifs])].slice(0, 6);
-}
-
-function Making({ taste }: { taste: TasteProfile | null }) {
-  const lines = voiceLines(taste);
-  const copy = lines.length ? lines : ["The line is on its way."];
-  const [phase, setPhase] = useState(0);
-  const [line, setLine] = useState(0);
-  useEffect(() => {
-    const rotate = setInterval(() => setLine((n) => (n + 1) % copy.length), 4500);
-    const steps = setInterval(() => setPhase((n) => Math.min(n + 1, STUDIO_PHASES.length - 1)), 18000);
-    return () => { clearInterval(rotate); clearInterval(steps); };
-  }, [copy.length]);
-  return (
-    <div className="mt-10 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
-      <p className="text-xs uppercase tracking-[0.35em] text-orange-400">{taste ? taste.brandName : "In the studio"}</p>
-      <p key={copy[line]} aria-live="polite" className="voice-line mt-4 min-h-16 font-serif text-2xl leading-snug md:text-3xl">{copy[line]}</p>
-      <ol className="mt-6 space-y-3">
-        {STUDIO_PHASES.map((label, i) => (
-          <li key={label} className={`flex items-center gap-3 text-sm ${i > phase ? "text-neutral-600" : ""}`}>
-            <span className={`h-2.5 w-2.5 rounded-full ${i < phase ? "bg-green-400" : i === phase ? "animate-pulse bg-orange-400" : "bg-neutral-700"}`} />
-            {label}
-          </li>
-        ))}
-      </ol>
-      <p className="mt-5 text-xs text-neutral-500">Building the business from this taste. Usually a minute or two.</p>
-    </div>
-  );
-}
-
-function pickImages(list: FileList | File[]) {
-  const images = [...list].filter(isImageFile);
-  const files = [...images].sort((a, b) => b.size - a.size).slice(0, MAX_PORTFOLIO_IMAGES);
-  files.sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name, undefined, { numeric: true }));
-  return { files, total: images.length };
-}
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const money = (price: ProductCard["price"]) => price ? new Intl.NumberFormat("en-US", { style: "currency", currency: price.currency || "USD", maximumFractionDigits: price.amount % 1 ? 2 : 0 }).format(price.amount) : null;
+const clock = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
 export default function Home() {
+  const [stage, setStage] = useState<Stage>("start");
   const [url, setUrl] = useState("");
-  const [note, setNote] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
-  const [fileLabel, setFileLabel] = useState("");
-  const [thumbs, setThumbs] = useState<string[]>([]);
-  const [step, setStep] = useState<Step>("idle");
+  const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const [notice, setNotice] = useState("");
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
-  const [taste, setTaste] = useState<TasteProfile | null>(null);
-  const [col, setCol] = useState<Collection | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [fromUpload, setFromUpload] = useState(false);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [models, setModels] = useState<StyleModel[]>([]);
   const [modelId, setModelId] = useState("");
-  const [referenceIds, setReferenceIds] = useState<string[]>([]);
-  const working = step === "scrape" || step === "taste" || step === "generate";
-  const shown = step !== "idle" && portfolio?.images.length ? portfolio.images : thumbs;
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const refs = useRef<Promise<(string | null)[]> | null>(null);
+  const [referenceIds, setReferenceIds] = useState<(string | null)[]>([]);
+  const chosen = useMemo(() => (portfolio ? selected.map((i) => portfolio.images[i]).filter(Boolean) : []), [portfolio, selected]);
+
+  function reset() {
+    setStage("start"); setBusy(""); setErr(""); setNotice(""); setPortfolio(null); setSelected([]); setPlan(null); setSlots([]); setModelId("");
+    refs.current = null;
+    setReferenceIds([]);
+    try { sessionStorage.removeItem(SAVE_KEY); } catch { /* storage blocked */ }
+  }
+
+  // A line survives a reload: restore it and keep polling its Arcade jobs.
+  useEffect(() => {
+    let saved: Saved | null = null;
+    try { saved = JSON.parse(sessionStorage.getItem(SAVE_KEY) ?? "null"); } catch { /* storage blocked or corrupt */ }
+    if (!saved?.plan || !Array.isArray(saved.slots)) return;
+    const { plan: savedPlan, images, slots: savedSlots, referenceIds: ids = [] } = saved;
+    refs.current = Promise.resolve(ids);
+    setReferenceIds(ids);
+    setPortfolio({ url: "", title: "", description: "", text: "", images });
+    setSelected(images.map((_, i) => i));
+    setPlan(savedPlan);
+    setSlots(savedSlots.map((s) => s.state === "starting" ? { ...s, state: "failed", error: "Interrupted before Arcade started." } : s));
+    setStage("line");
+  }, []);
 
   useEffect(() => {
-    const urls = files.filter(isImageFile).map((file) => URL.createObjectURL(file));
-    setThumbs(urls);
-    return () => urls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
-  }, [files]);
+    if (stage !== "line" || !plan) return;
+    const saved: Saved = { plan, slots, images: chosen, referenceIds };
+    try { sessionStorage.setItem(SAVE_KEY, JSON.stringify(saved)); } catch { /* storage full or blocked */ }
+  }, [stage, plan, slots, chosen, referenceIds]);
 
-  function takeFolder(list: FileList | null) {
-    const picked = pickImages(list ?? []);
-    setFiles(picked.files);
-    setPortfolio(null);
-    setFileLabel(picked.total === 0 ? "No images in that folder" : picked.total > picked.files.length ? `${picked.files.length} of ${picked.total} images, largest first` : `${picked.files.length} image${picked.files.length === 1 ? "" : "s"} from folder`);
+  async function fromUrl() {
+    if (!url.trim() || busy) return;
+    setErr(""); setNotice(""); setBusy("Reading the page and pulling the artwork");
+    try {
+      const p = await post<Portfolio>("/api/scrape", { url });
+      setPortfolio(p);
+      setFromUpload(false);
+      setSelected(p.images.slice(0, MAX_PORTFOLIO_IMAGES).map((_, i) => i));
+      setStage("pick");
+    } catch (e) { setErr(message(e)); }
+    finally { setBusy(""); }
   }
 
-  function takeZip(list: FileList | null) {
-    const zip = [...(list ?? [])].find((file) => /\.zip$/i.test(file.name) || file.type === "application/zip");
-    setFiles(zip ? [zip] : []);
-    setPortfolio(null);
-    setFileLabel(zip ? zip.name : "");
-  }
-
-  async function finish(p: Portfolio) {
-    setPortfolio(p);
-    setStep("taste");
-    const tastePromise = post<{ taste: TasteProfile }>("/api/taste", p);
-    const refsPromise = post<{ referenceIds: string[] }>("/api/references", { images: p.images.slice(0, MAX_REFERENCE_IMAGES) }).catch(() => ({ referenceIds: [] as string[] }));
-    const modelsPromise = fetch("/api/models").then(async (response) => {
-      const data = await response.json().catch(() => ({ items: [] }));
-      const items = Array.isArray(data.items) ? data.items as StyleModel[] : [];
-      return items.filter((model) => model?.modelId && model?.name);
-    }).catch(() => [] as StyleModel[]);
-    const { taste: nextTaste } = await tastePromise;
-    setTaste(nextTaste);
-    setModels(await modelsPromise);
-    setModelId("");
-    setReferenceIds((await refsPromise).referenceIds ?? []);
-    setStep("review");
-  }
-
-  async function buildLine() {
-    if (!taste) return;
+  async function fromFiles(list: FileList | null) {
+    const files = [...(list ?? [])];
+    const zip = files.find((file) => ZIP_FILE.test(file.name) || file.type.includes("zip"));
+    const images = files.filter((file) => file.type.startsWith("image/") || IMAGE_FILE.test(file.name));
+    if (!zip && !images.length) { setErr("Choose images or a .zip"); return; }
+    const picked = zip ? [zip] : images.slice(0, MAX_PORTFOLIO_IMAGES);
     setErr("");
+    setNotice(!zip && images.length > MAX_PORTFOLIO_IMAGES ? `Using the first ${MAX_PORTFOLIO_IMAGES} of ${images.length} images.` : "");
+    setBusy("Preparing your images");
     try {
-      setStep("generate");
-      setCol(await post<Collection>("/api/collection", { taste, referenceIds, ...(modelId ? { modelId } : {}) }));
-      setStep("done");
-    } catch (e) { setErr(String(e)); setStep("error"); }
-  }
-
-  async function runUrl() {
-    if (!url.trim()) return;
-    setErr(""); setCol(null); setTaste(null); setPortfolio(null);
-    try {
-      setStep("scrape");
-      await finish(await post<Portfolio>("/api/scrape", { url }));
-    } catch (e) { setErr(String(e)); setStep("error"); }
-  }
-
-  async function runUpload() {
-    if (!files.length) { setErr("Choose a folder of images or a .zip"); setStep("error"); return; }
-    setErr(""); setCol(null); setTaste(null); setPortfolio(null);
-    try {
-      setStep("scrape");
       const body = new FormData();
-      body.set("note", note);
-      for (const file of files) body.append("file", file, file.webkitRelativePath || file.name);
-      const response = await fetch("/api/upload", { method: "POST", body });
-      const portfolioBody = await response.json();
-      if (!response.ok || portfolioBody.error) throw new Error(portfolioBody.error ?? response.statusText);
-      await finish(portfolioBody);
-    } catch (e) { setErr(String(e)); setStep("error"); }
+      for (const file of picked) body.append("file", file, file.name);
+      const r = await fetch("/api/upload", { method: "POST", body });
+      const p = await r.json();
+      if (!r.ok || p.error) throw new Error(p.error ?? r.statusText);
+      setPortfolio(p);
+      setFromUpload(true);
+      const all = (p as Portfolio).images.map((_, i) => i);
+      setSelected(all);
+      await read(p, all, true);
+    } catch (e) { setErr(message(e)); setBusy(""); }
   }
 
-  if (step === "review" && taste) return (
-    <TasteReview
-      taste={taste}
+  async function read(p: Portfolio, indexes: number[], upload: boolean) {
+    const images = indexes.map((i) => p.images[i]).filter(Boolean);
+    if (!images.length) return;
+    setErr(""); setBusy(""); setStage("reading");
+    refs.current = post<{ referenceIds: (string | null)[] }>("/api/references", { images }).then((r) => r.referenceIds).catch(() => images.map(() => null));
+    refs.current.then(setReferenceIds);
+    const modelsPromise = fetch("/api/models").then((r) => r.json()).then((d) => (Array.isArray(d.items) ? d.items as StyleModel[] : [])).catch(() => []);
+    try {
+      const next = await post<Plan>("/api/direct", { ...p, images });
+      setPlan(next);
+      setModels(await modelsPromise);
+      setStage("review");
+    } catch (e) {
+      setErr(message(e));
+      setStage(upload ? "start" : "pick");
+    }
+  }
+
+  async function start(item: PlanItem, all: Plan) {
+    const ids = (await refs.current) ?? [];
+    const referenceIds = item.referenceIndexes.map((i) => ids[i]).filter((id): id is string => Boolean(id));
+    try {
+      const { jobId } = await post<{ jobId: string }>("/api/make", {
+        item, referenceIds, colors: all.taste.palette.map((c) => c.hex), motifs: all.taste.motifs, modelId: item.world === "print" ? modelId : "",
+      });
+      setSlots((cur) => cur.map((s) => s.item.key === item.key ? { ...s, state: "making", jobId } : s));
+    } catch (e) {
+      setSlots((cur) => cur.map((s) => s.item.key === item.key ? { ...s, state: "failed", error: message(e) } : s));
+    }
+  }
+
+  function build() {
+    if (!plan) return;
+    const now = Date.now();
+    setSlots(plan.items.map((item) => ({ item, state: "starting", startedAt: now })));
+    setStage("line");
+    plan.items.forEach((item) => start(item, plan));
+  }
+
+  function retry(key: string) {
+    const slot = slots.find((s) => s.item.key === key);
+    if (!slot || !plan) return;
+    setSlots((cur) => cur.map((s) => s.item.key === key ? { item: s.item, state: "starting", startedAt: Date.now() } : s));
+    start(slot.item, plan);
+  }
+
+  useEffect(() => { window.scrollTo(0, 0); }, [stage]);
+
+  // Poll Arcade jobs while any product is still being made.
+  const making = slots.some((s) => s.state === "making");
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  useEffect(() => {
+    if (!making) return;
+    let inFlight = false;
+    const tick = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      await Promise.all(slotsRef.current.filter((s) => s.state === "making" && s.jobId).map(async (s) => {
+        const r = await post<ItemStatus>("/api/make/status", { jobId: s.jobId }).catch(() => null);
+        if (!r || r.status === "running") return;
+        setSlots((cur) => cur.map((c) => c.jobId !== s.jobId ? c : r.status === "succeeded" ? { ...c, state: "ready", product: r.product } : { ...c, state: "failed", error: r.error }));
+      }));
+      inFlight = false;
+    };
+    const t = setInterval(tick, POLL_MS);
+    return () => clearInterval(t);
+  }, [making]);
+
+  if (stage === "pick" && portfolio) return (
+    <PickImages
+      portfolio={portfolio}
+      selected={selected}
+      onToggle={(i) => setSelected((cur) => cur.includes(i) ? cur.filter((n) => n !== i) : cur.length < MAX_PORTFOLIO_IMAGES ? [...cur, i].sort((a, b) => a - b) : cur)}
+      onRead={() => read(portfolio, selected, false)}
+      onReset={reset}
+      err={err}
+    />
+  );
+  if (stage === "reading") return <Reading images={chosen} />;
+  if (stage === "review" && plan) return (
+    <Review
+      plan={plan}
+      images={chosen}
       models={models}
       modelId={modelId}
       onModel={setModelId}
-      onBuild={buildLine}
-      onReset={() => setStep("idle")}
+      onBuild={build}
+      onBack={fromUpload ? reset : () => setStage("pick")}
+      backLabel={fromUpload ? "Start over" : "Change images"}
     />
   );
-  if (step === "generate" && taste) return (
-    <main className="min-h-screen bg-[#0e0e10] text-white">
-      <div className="mx-auto max-w-3xl px-6 py-24">
-        <Making taste={taste} />
-      </div>
-    </main>
-  );
-  if (step === "done" && taste && col) return <Storefront taste={taste} col={col} portfolio={portfolio} onReset={() => setStep("idle")} />;
-
-  const status = STEPS.find(([name]) => name === step)?.[1];
+  if (stage === "line" && plan) return <Line plan={plan} slots={slots} images={chosen} onRetry={retry} onReset={reset} />;
 
   return (
-    <main className="relative min-h-dvh overflow-hidden bg-[#fafaf8] text-[#161616]">
+    <main className="relative min-h-[max(100dvh,700px)] overflow-hidden bg-paper text-ink md:min-h-[max(100dvh,860px)]">
       <HeroProducts />
-      <div className="relative z-20 mx-auto flex min-h-dvh flex-col items-center px-6 pb-16 pt-12 md:pt-16">
-        <p className="font-serif text-[1.45rem] font-medium tracking-[-0.03em] text-[#1a1a1a]">Product Line</p>
-        <h1 className="mt-[12vh] max-w-5xl text-center font-serif text-[clamp(2.75rem,6.4vw,6rem)] font-normal leading-[1.02] tracking-[-0.035em] text-[#141414]">
-          Use your portfolio.<br />Find your product line.
+      <div className="relative z-20 mx-auto flex flex-col items-center px-6 pb-16 pt-10 md:pt-14">
+        <p className="font-serif text-[1.65rem] tracking-[-0.03em]">Product Line</p>
+        <h1 className="mt-[9vh] max-w-5xl text-center font-serif text-[clamp(2.75rem,6.4vw,6rem)] font-normal leading-[0.96] tracking-[-0.045em]">
+          <span className="sr-only">Use your portfolio, taste, or inspiration. Find your product line.</span>
+          <span aria-hidden="true">Use your <span className="whitespace-nowrap"><RotatingWord words={["portfolio", "taste", "inspiration"]} />.</span><br />Find your product line.</span>
         </h1>
-        <form onSubmit={(e) => { e.preventDefault(); runUrl(); }} className="mt-10 w-full max-w-lg">
+        <form onSubmit={(e) => { e.preventDefault(); fromUrl(); }} className="mt-10 w-full max-w-lg">
           <label className="relative block">
             <span className="sr-only">Portfolio URL</span>
             <LinkIcon />
@@ -193,66 +222,348 @@ export default function Home() {
               placeholder="Paste a URL to your portfolio"
               aria-label="Portfolio URL"
               inputMode="url"
-              disabled={working}
-              className="h-14 w-full rounded-full border border-[#e4e4de] bg-white pl-12 pr-5 text-[15px] text-[#1a1a1a] shadow-[0_1px_2px_rgba(20,20,20,0.04)] outline-none placeholder:text-[#9b9b94] focus:border-[#cfcfc8] focus:ring-2 focus:ring-[#1c1c1c]/10 disabled:opacity-60"
+              disabled={!!busy}
+              className="h-14 w-full rounded-[32px] border border-field bg-white pl-12 pr-5 text-base text-[#242934] shadow-[0_3px_10px_#18232a02] outline-none transition placeholder:text-hint focus:border-focus focus:ring-[3px] focus:ring-green/5 disabled:opacity-60"
             />
           </label>
         </form>
-        <p className="mt-4 text-center text-sm text-[#8d8d86]">
-          or{" "}
-          <label className="cursor-pointer underline decoration-[#d5d5ce] underline-offset-4 hover:text-[#1a1a1a]">
-            upload a folder
-            <input
-              type="file"
-              multiple
-              accept="image/*"
-              disabled={working}
-              className="sr-only"
-              aria-label="Upload a folder of images"
-              onChange={(e) => { const picked = e.target.files; if (picked?.length) takeFolder(picked); e.target.value = ""; }}
-              {...({ webkitdirectory: "", directory: "" } as FolderAttrs)}
-            />
-          </label>
-          {" "}or{" "}
-          <label className="cursor-pointer underline decoration-[#d5d5ce] underline-offset-4 hover:text-[#1a1a1a]">
-            a .zip
-            <input type="file" accept=".zip,application/zip" disabled={working} className="sr-only" aria-label="Upload a zip of images" onChange={(e) => { const picked = e.target.files; if (picked?.length) takeZip(picked); e.target.value = ""; }} />
-          </label>
-        </p>
-        {files.length > 0 && (
-          <div className="mt-4 flex w-full max-w-lg flex-col items-center gap-3">
-            <p className="text-sm text-[#6f6f68]">{fileLabel}</p>
-            {shown.length > 0 && (
-              <ul className="flex gap-2 overflow-x-auto">
-                {shown.map((src, i) => (
-                  <li key={`${i}-${src.slice(0, 24)}`} className="shrink-0">
-                    <img src={src} alt="" className="h-12 w-12 rounded-lg object-cover" />
-                  </li>
-                ))}
-              </ul>
-            )}
-            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional note" aria-label="Note or bio" className="h-10 w-full max-w-xs rounded-full border border-[#e4e4de] bg-white px-4 text-sm outline-none placeholder:text-[#9b9b94] focus:ring-2 focus:ring-[#1c1c1c]/10" />
-            <button type="button" onClick={runUpload} disabled={working} className="text-sm text-[#1a1a1a] underline decoration-[#d5d5ce] underline-offset-4">Build from these files</button>
-          </div>
-        )}
-        {status && <p className="mt-6 text-sm text-[#6f6f68]" aria-live="polite">{status}</p>}
-        {err && <p className="mt-4 max-w-lg text-center text-sm text-red-700">{err}</p>}
+        <DropZone disabled={!!busy} onFiles={fromFiles} />
+        {busy && <p className="mt-6 flex items-center gap-2 text-sm text-muted" aria-live="polite"><Dots />{busy}</p>}
+        {notice && !err && <p className="mt-3 text-sm text-muted">{notice}</p>}
+        {err && <p className="mt-4 max-w-lg text-center text-[13px] leading-snug text-ink" role="alert">{err}</p>}
       </div>
     </main>
   );
 }
 
+/** Cycles the last word of the headline. Holds the first word when reduced motion is on. */
+function RotatingWord({ words }: { words: string[] }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const t = setInterval(() => setI((n) => (n + 1) % words.length), 2600);
+    return () => clearInterval(t);
+  }, [words.length]);
+  return <span key={words[i]} className="rotating-word inline-block">{words[i]}</span>;
+}
+
+function DropZone({ disabled, onFiles }: { disabled: boolean; onFiles: (files: FileList | null) => void }) {
+  const [over, setOver] = useState(false);
+  return (
+    <label
+      onDragOver={(e) => { e.preventDefault(); if (!disabled) setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); if (!disabled) onFiles(e.dataTransfer.files); }}
+      className={`mt-4 flex w-full max-w-lg cursor-pointer flex-col items-center rounded-[18px] border-[1.5px] border-dashed px-6 py-7 text-center transition ${over ? "border-focus bg-[#f5f7f4]" : "border-field bg-white/70 hover:border-[#c9cdc8] hover:bg-white"} ${disabled ? "pointer-events-none opacity-60" : ""}`}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 text-[#454e5f]">
+        <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+      </svg>
+      <span className="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-[#242934]">Drop images here or click to upload</span>
+      <span className="mt-1 text-[13px] text-hint">Add up to {MAX_PORTFOLIO_IMAGES} images</span>
+      <input
+        type="file"
+        multiple
+        accept="image/*,.zip,application/zip"
+        disabled={disabled}
+        className="sr-only"
+        aria-label={`Upload up to ${MAX_PORTFOLIO_IMAGES} images`}
+        onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }}
+      />
+    </label>
+  );
+}
+
+function Dots() {
+  return (
+    <span className="flex gap-1" aria-hidden="true">
+      {[0, 1, 2].map((i) => <i key={i} className="kai-dot block h-[5px] w-[5px] rounded-full bg-[#6d747c]" style={{ animationDelay: `${i * 0.16}s` }} />)}
+    </span>
+  );
+}
+
+function Header({ right }: { right?: React.ReactNode }) {
+  return (
+    <header className="mx-auto flex h-20 max-w-5xl items-center justify-between px-6">
+      <span className="font-serif text-[1.4rem] tracking-[-0.03em]">Product Line</span>
+      {right}
+    </header>
+  );
+}
+
+function TextButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return <button type="button" onClick={onClick} className="px-0.5 py-2 text-sm font-semibold tracking-[-0.01em] text-subtle hover:text-ink">{children}</button>;
+}
+
+function PickImages({ portfolio, selected, onToggle, onRead, onReset, err }: {
+  portfolio: Portfolio; selected: number[]; onToggle: (i: number) => void; onRead: () => void; onReset: () => void; err: string;
+}) {
+  const full = selected.length >= MAX_PORTFOLIO_IMAGES;
+  let host = portfolio.url;
+  try { host = new URL(portfolio.url).hostname.replace(/^www\./, ""); } catch { /* keep the raw url */ }
+  return (
+    <main className="min-h-dvh bg-paper text-ink">
+      <Header right={<TextButton onClick={onReset}>Start over</TextButton>} />
+      <div className="mx-auto max-w-5xl px-6 pb-32 pt-8">
+        <p className="text-sm text-muted">{host}</p>
+        <h1 className="mt-2 font-serif text-[clamp(2rem,4.3vw,3.25rem)] font-normal leading-[1.05] tracking-[-0.04em]">Pick the work that sounds like you.</h1>
+        <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted">
+          Choose up to {MAX_PORTFOLIO_IMAGES}. GPT reads these to find your taste, and Arcade uses them as references for every print.
+        </p>
+        <ul className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          {portfolio.images.map((src, i) => {
+            const on = selected.includes(i);
+            return (
+              <li key={i}>
+                <button
+                  type="button"
+                  aria-pressed={on}
+                  aria-label={`Image ${i + 1}${on ? ", selected" : ""}`}
+                  onClick={() => onToggle(i)}
+                  disabled={!on && full}
+                  className={`group relative block aspect-square w-full overflow-hidden rounded-[14px] border bg-white transition ${on ? "border-ink" : "border-[#e6e5e1] opacity-60 hover:opacity-100"} disabled:cursor-not-allowed disabled:hover:opacity-60`}
+                >
+                  <img src={src} alt="" className="h-full w-full object-cover" />
+                  <span className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-xs font-semibold ${on ? "bg-ink text-white" : "border border-field bg-white/90 text-transparent"}`}>
+                    {on ? selected.indexOf(i) + 1 : ""}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      <div className="fixed inset-x-0 bottom-0 border-t border-line bg-paper/95 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
+          <p className="text-sm text-muted" aria-live="polite">{selected.length} of {MAX_PORTFOLIO_IMAGES} picked{err && <span className="ml-3 text-ink">{err}</span>}</p>
+          <button type="button" onClick={onRead} disabled={!selected.length} className="h-10 rounded-full bg-pill px-[18px] text-sm font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover disabled:bg-[#e4e4e1] disabled:text-[#8d8d89]">
+            Read my taste
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function Reading({ images }: { images: string[] }) {
+  const [line, setLine] = useState(0);
+  const lines = ["Looking at the work", "Finding the palette", "Naming the motifs", "Choosing what Arcade should make", "Writing the prompts"];
+  useEffect(() => { const t = setInterval(() => setLine((n) => Math.min(n + 1, lines.length - 1)), 3500); return () => clearInterval(t); }, [lines.length]);
+  return (
+    <main className="grid min-h-dvh place-items-center bg-paper px-6 text-ink">
+      <div className="flex flex-col items-center text-center">
+        <ul className="flex -space-x-6">
+          {images.slice(0, 6).map((src, i) => (
+            <li key={i} className="h-20 w-20 overflow-hidden rounded-[14px] border-2 border-paper bg-white shadow-[0_8px_24px_rgba(20,23,22,.12)]" style={{ rotate: `${(i - 2.5) * 4}deg` }}>
+              <img src={src} alt="" className="h-full w-full object-cover" />
+            </li>
+          ))}
+        </ul>
+        <h1 className="mt-10 font-serif text-[clamp(2rem,4vw,3rem)] font-normal tracking-[-0.04em]">Reading your taste</h1>
+        <p key={line} className="voice-line mt-3 flex items-center gap-2 text-[15px] text-muted" aria-live="polite"><Dots />{lines[line]}</p>
+      </div>
+    </main>
+  );
+}
+
+function Swatches({ palette }: { palette: { name: string; hex: string }[] }) {
+  return (
+    <ul className="flex flex-wrap gap-3">
+      {palette.map((swatch) => (
+        <li key={`${swatch.name}-${swatch.hex}`} className="flex items-center gap-2.5 rounded-full border border-[#e6e5e1] bg-white py-1.5 pl-1.5 pr-4">
+          <span className="h-7 w-7 shrink-0 rounded-full ring-1 ring-black/10" style={{ background: swatch.hex }} />
+          <span className="text-[13px] font-semibold tracking-[-0.02em]">{swatch.name}</span>
+          <span className="text-xs uppercase text-muted">{swatch.hex}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Review({ plan, images, models, modelId, onModel, onBuild, onBack, backLabel }: {
+  plan: Plan; images: string[]; models: StyleModel[]; modelId: string; onModel: (id: string) => void; onBuild: () => void; onBack: () => void; backLabel: string;
+}) {
+  const { taste } = plan;
+  const chip = (on: boolean) => `rounded-full px-4 py-2 text-sm font-semibold tracking-[-0.01em] ${on ? "bg-pill text-white" : "border border-field bg-white text-subtle hover:text-ink"}`;
+  return (
+    <main className="min-h-dvh bg-paper text-ink">
+      <Header right={<TextButton onClick={onBack}>{backLabel}</TextButton>} />
+      <div className="mx-auto max-w-5xl px-6 pb-24 pt-8">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green">Your taste{plan.director === "openai" ? ", read by GPT" : ""}</p>
+        <h1 className="mt-4 font-serif text-[clamp(2.75rem,6vw,5rem)] font-normal leading-[0.96] tracking-[-0.045em]">{taste.brandName}</h1>
+        <p className="mt-3 font-serif text-2xl tracking-[-0.02em] text-subtle">{taste.tagline}</p>
+        {taste.brief && <p className="mt-6 max-w-2xl text-base leading-relaxed text-[#1c1f23]">{taste.brief}</p>}
+        {plan.notice && <p className="mt-4 max-w-2xl rounded-[14px] border border-line bg-white px-4 py-3 text-sm text-muted">{plan.notice}</p>}
+
+        <div className="mt-8"><Swatches palette={taste.palette} /></div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {taste.motifs.map((motif) => <span key={motif} className="rounded-full bg-chip px-3 py-1 text-xs text-chip-ink">{motif}</span>)}
+        </div>
+
+        <h2 className="mt-14 font-serif text-[28px] font-normal tracking-[-0.03em]">What Arcade will make</h2>
+        <ol className="mt-4 divide-y divide-line border-y border-line">
+          {plan.items.map((item) => (
+            <li key={item.key} className="grid gap-4 py-6 md:grid-cols-[1fr_auto] md:items-start">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{item.categoryName}{item.world === "jewelry" ? " · Jewelry" : ""}</p>
+                <h3 className="mt-1.5 font-serif text-2xl font-normal tracking-[-0.03em]">{item.name}</h3>
+                <p className="mt-1 text-sm text-subtle">{item.copy}</p>
+                <details className="mt-3 text-sm">
+                  <summary className="cursor-pointer font-semibold text-subtle hover:text-ink">Arcade prompt</summary>
+                  <p className="mt-2 max-w-2xl leading-relaxed text-muted">{item.prompt}</p>
+                </details>
+              </div>
+              {item.world === "print" ? (
+                <ul className="flex gap-2" aria-label="Reference images">
+                  {item.referenceIndexes.map((i) => images[i] && (
+                    <li key={i} className="h-16 w-16 overflow-hidden rounded-[10px] border border-[#e6e5e1] bg-white"><img src={images[i]} alt={`Reference ${i + 1}`} className="h-full w-full object-cover" /></li>
+                  ))}
+                </ul>
+              ) : <p className="text-xs text-muted md:max-w-40 md:text-right">Arcade designs jewelry from the prompt alone.</p>}
+            </li>
+          ))}
+        </ol>
+
+        {models.length > 0 && (
+          <fieldset className="mt-10">
+            <legend className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Print style</legend>
+            <p className="mt-2 text-sm text-muted">Your images and palette guide every print. You can also lean on one of Arcade&apos;s style models.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" aria-pressed={modelId === ""} onClick={() => onModel("")} className={chip(modelId === "")}>Your style</button>
+              {models.map((model) => (
+                <button type="button" key={model.modelId} aria-pressed={modelId === model.modelId} onClick={() => onModel(model.modelId)} className={chip(modelId === model.modelId)}>{model.name}</button>
+              ))}
+            </div>
+          </fieldset>
+        )}
+
+        <div className="mt-12 flex items-center gap-5">
+          <button type="button" onClick={onBuild} className="h-12 rounded-full bg-pill px-8 text-[15px] font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover">Build the line</button>
+          <p className="text-sm text-muted">{plan.items.length} products, usually 1 to 3 minutes.</p>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function Line({ plan, slots, images, onRetry, onReset }: { plan: Plan; slots: Slot[]; images: string[]; onRetry: (key: string) => void; onReset: () => void }) {
+  const { taste } = plan;
+  const [now, setNow] = useState(() => Date.now());
+  const [buying, setBuying] = useState<string | null>(null);
+  const [buyErr, setBuyErr] = useState("");
+  const [fresh, setFresh] = useState<Record<string, ProductCard>>({});
+  const pending = slots.filter((s) => s.state === "starting" || s.state === "making").length;
+  const ready = slots.filter((s) => s.state === "ready").length;
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [pending]);
+
+  async function buy(productId: string) {
+    setBuying(productId); setBuyErr("");
+    try {
+      const { checkoutUrl } = await post<{ checkoutUrl: string }>("/api/checkout", { lines: [{ productId, quantity: 1 }] });
+      window.location.href = checkoutUrl;
+    } catch (e) { setBuyErr(message(e)); setBuying(null); }
+  }
+
+  // Arcade image URLs expire. Re-fetch a card once if its image stops loading.
+  async function refresh(productId: string) {
+    if (fresh[productId]) return;
+    const { products } = await post<{ products: ProductCard[] }>("/api/art", { productIds: [productId] }).catch(() => ({ products: [] as ProductCard[] }));
+    if (products[0]) setFresh((cur) => ({ ...cur, [productId]: products[0] }));
+  }
+
+  return (
+    <main className="min-h-dvh bg-paper text-ink">
+      <header className="mx-auto flex h-20 max-w-6xl items-center justify-between px-6">
+        <span className="font-serif text-2xl tracking-[-0.03em]">{taste.brandName}</span>
+        <TextButton onClick={onReset}>New line</TextButton>
+      </header>
+
+      <section className="mx-auto max-w-6xl px-6 pt-10">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green">The debut line</p>
+        <h1 className="mt-4 max-w-4xl font-serif text-[clamp(2.75rem,6.4vw,5.5rem)] font-normal leading-[0.96] tracking-[-0.045em]">{taste.tagline}</h1>
+        <p className="mt-6 max-w-2xl text-base leading-relaxed text-[#1c1f23]">{taste.voice.sample || taste.brief}</p>
+        <div className="mt-6 flex gap-1.5" aria-label="Palette">
+          {taste.palette.map((c) => <span key={c.hex + c.name} title={c.name} className="h-3 w-10 rounded-full ring-1 ring-black/5" style={{ background: c.hex }} />)}
+        </div>
+        <p className="mt-8 flex items-center gap-2 text-sm text-muted" aria-live="polite">
+          {pending ? <><Dots />Arcade is making {pending} of {slots.length} products</> : `${ready} of ${slots.length} products ready`}
+        </p>
+        {buyErr && <p className="mt-2 text-[13px] text-ink" role="alert">{buyErr}</p>}
+      </section>
+
+      <section className="mx-auto grid max-w-6xl gap-x-8 gap-y-12 px-6 py-12 sm:grid-cols-2 lg:grid-cols-4">
+        {slots.map((slot) => {
+          const product = slot.product ? fresh[slot.product.productId] ?? slot.product : undefined;
+          const price = money(product?.price ?? null);
+          return (
+            <article key={slot.item.key} className="flex flex-col">
+              <div className="relative aspect-square overflow-hidden rounded-[18px] border border-[#e6e5e1] bg-white">
+                {product?.imageUrl ? (
+                  <img src={product.imageUrl} alt={slot.item.name} onError={() => refresh(product.productId)} className="explore-in h-full w-full object-cover" />
+                ) : slot.state === "failed" ? (
+                  <div className="grid h-full place-items-center p-6 text-center">
+                    <div>
+                      <p className="text-sm text-ink">Arcade couldn&apos;t make this one.</p>
+                      <p className="mt-1 line-clamp-4 text-xs text-muted">{slot.error}</p>
+                      <button type="button" onClick={() => onRetry(slot.item.key)} className="mt-4 h-9 rounded-full bg-pill px-4 text-[13px] font-semibold text-white hover:bg-pill-hover">Try again</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="making absolute inset-0 grid place-items-center">
+                    {slot.item.world === "print" && slot.item.referenceIndexes[0] !== undefined && images[slot.item.referenceIndexes[0]] && (
+                      <img src={images[slot.item.referenceIndexes[0]]} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-25 blur-xl" />
+                    )}
+                    <div className="relative text-center">
+                      <Dots />
+                      <p className="mt-3 text-[13px] font-semibold tracking-[-0.01em]">{slot.state === "starting" ? "Sending to Arcade" : slot.item.world === "jewelry" ? "Designing the piece" : "Designing the print"}</p>
+                      <p className="mt-1 text-xs tabular-nums text-muted">{clock(now - slot.startedAt)}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted">{slot.item.categoryName}</p>
+              <div className="mt-1 flex items-baseline justify-between gap-3">
+                <h3 className="font-serif text-[22px] font-normal leading-tight tracking-[-0.03em]">{slot.item.name}</h3>
+                {price && <span className="text-[15px] text-[#252b37]">{price}</span>}
+              </div>
+              <p className="mt-1.5 text-sm leading-relaxed text-subtle">{slot.item.copy}</p>
+              {product?.maker && <p className="mt-1 text-xs text-muted">Made to order by {product.maker}</p>}
+              {product && (
+                <button type="button" onClick={() => buy(product.productId)} disabled={!!buying} className="mt-4 h-10 rounded-full bg-pill text-sm font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover disabled:opacity-50">
+                  {buying === product.productId ? "Opening checkout" : "Buy on Arcade"}
+                </button>
+              )}
+            </article>
+          );
+        })}
+      </section>
+
+      {images.length > 0 && (
+        <section className="mx-auto max-w-6xl border-t border-line px-6 py-10">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">From the portfolio</p>
+          <ul className="mt-4 flex gap-3 overflow-x-auto pb-1">
+            {images.map((src, i) => <li key={i} className="h-20 w-20 shrink-0 overflow-hidden rounded-[12px] border border-[#e6e5e1] bg-white"><img src={src} alt="" className="h-full w-full object-cover" /></li>)}
+          </ul>
+        </section>
+      )}
+    </main>
+  );
+}
+
+// Placed like the reference mock: framing the bottom of the page, clear of the URL field and drop zone.
 const HERO_SLOTS: { className: string; rot: string; delay: string; mobile?: boolean }[] = [
-  { className: "left-[-7%] top-[16%] w-[min(28vw,300px)]", rot: "-7deg", delay: "0s" },
-  { className: "left-[-2%] bottom-[-8%] w-[min(20vw,210px)]", rot: "5deg", delay: "-1.4s", mobile: true },
-  { className: "left-[15%] bottom-[7%] w-[min(14vw,160px)]", rot: "-12deg", delay: "-2.2s", mobile: true },
-  { className: "left-[34%] bottom-[-5%] w-[min(18vw,210px)]", rot: "3deg", delay: "-0.7s", mobile: true },
-  { className: "left-[51%] bottom-[3%] w-[min(15vw,180px)]", rot: "-5deg", delay: "-2.8s" },
-  { className: "right-[18%] bottom-[12%] w-[min(13vw,150px)]", rot: "9deg", delay: "-1.8s", mobile: true },
-  { className: "right-[-8%] top-[20%] w-[min(24vw,270px)]", rot: "8deg", delay: "-0.3s" },
-  { className: "right-[-1%] bottom-[-9%] w-[min(17vw,190px)]", rot: "-6deg", delay: "-3.1s", mobile: true },
-  { className: "left-[7%] top-[24%] w-[min(12vw,140px)]", rot: "11deg", delay: "-1.1s" },
-  { className: "right-[14%] top-[11%] w-[min(13vw,150px)]", rot: "-9deg", delay: "-2.5s" },
+  { className: "left-[-2%] top-[52%] w-[min(17vw,250px)]", rot: "-8deg", delay: "0s" },
+  { className: "left-[18%] bottom-[11%] w-[min(10vw,150px)]", rot: "-6deg", delay: "-2.2s", mobile: true },
+  { className: "left-[38%] bottom-[2%] w-[min(11vw,165px)]", rot: "4deg", delay: "-0.7s", mobile: true },
+  { className: "right-[20%] bottom-[13%] w-[min(9.5vw,140px)]", rot: "6deg", delay: "-1.8s" },
+  { className: "left-[4%] bottom-[-5%] w-[min(15vw,220px)]", rot: "9deg", delay: "-1.4s", mobile: true },
+  { className: "left-[56%] bottom-[-4%] w-[min(10vw,150px)]", rot: "-3deg", delay: "-2.8s", mobile: true },
+  { className: "right-[-3%] top-[48%] w-[min(16vw,240px)]", rot: "10deg", delay: "-0.3s" },
+  { className: "right-[5%] bottom-[-4%] w-[min(11vw,165px)]", rot: "-8deg", delay: "-3.1s", mobile: true },
 ];
 
 function HeroProducts() {
@@ -283,156 +594,9 @@ function HeroProducts() {
 
 function LinkIcon() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9b9b94]">
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#454e5f]">
       <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" d="M10 13a5 5 0 0 0 7.07 0l1.42-1.41a5 5 0 0 0-7.08-7.08L10.5 5.4" />
       <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" d="M14 11a5 5 0 0 0-7.07 0L5.5 12.42a5 5 0 0 0 7.08 7.08l.91-.91" />
     </svg>
-  );
-}
-
-function TasteReview({ taste, models, modelId, onModel, onBuild, onReset }: {
-  taste: TasteProfile;
-  models: StyleModel[];
-  modelId: string;
-  onModel: (id: string) => void;
-  onBuild: () => void;
-  onReset: () => void;
-}) {
-  return (
-    <main className="min-h-screen bg-[#0e0e10] text-white">
-      <div className="mx-auto max-w-3xl px-6 py-24">
-        <p className="text-xs uppercase tracking-[0.4em] text-orange-400">Taste profile</p>
-        <h1 className="mt-4 font-serif text-5xl leading-tight">{taste.brandName}</h1>
-        <p className="mt-4 text-lg text-neutral-300">{taste.tagline}</p>
-        <ul className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {taste.palette.map((swatch) => (
-            <li key={`${swatch.name}-${swatch.hex}`} className="flex items-center gap-3 rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-              <span className="h-10 w-10 shrink-0 rounded-full ring-1 ring-white/30" style={{ background: swatch.hex }} />
-              <span>
-                <span className="block text-sm">{swatch.name}</span>
-                <span className="block text-xs uppercase tracking-wider text-neutral-500">{swatch.hex}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-        <div className="mt-6 flex flex-wrap gap-2">
-          {taste.motifs.map((motif) => <span key={motif} className="rounded-full bg-white/10 px-3 py-1 text-sm">{motif}</span>)}
-        </div>
-        <p className="mt-6 font-serif text-2xl leading-snug">{taste.voice.sample}</p>
-        <p className="mt-2 text-sm uppercase tracking-[0.2em] text-neutral-500">{taste.voice.adjectives.join(" · ")}</p>
-        <fieldset className="mt-10">
-          <legend className="text-xs uppercase tracking-[0.3em] text-neutral-500">Style</legend>
-          <p className="mt-2 text-sm text-neutral-400">Your style uses the portfolio and this palette. A Canon model is optional.</p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" aria-pressed={modelId === ""} onClick={() => onModel("")} className={`rounded-full px-4 py-2 text-sm ${modelId === "" ? "bg-orange-500 text-black" : "bg-white/10 ring-1 ring-white/15"}`}>Your style</button>
-            {models.map((model) => (
-              <button type="button" key={model.modelId} aria-pressed={modelId === model.modelId} onClick={() => onModel(model.modelId)} className={`rounded-full px-4 py-2 text-sm ${modelId === model.modelId ? "bg-orange-500 text-black" : "bg-white/10 ring-1 ring-white/15"}`}>{model.name}</button>
-            ))}
-          </div>
-        </fieldset>
-        <div className="mt-8 flex items-center gap-4">
-          <button type="button" onClick={onBuild} className="rounded-full bg-orange-500 px-8 py-4 font-medium text-black hover:bg-orange-400">Build the business</button>
-          <button type="button" onClick={onReset} className="text-sm text-neutral-500">Start over</button>
-        </div>
-      </div>
-    </main>
-  );
-}
-
-function paletteRoles(palette: { hex: string }[]) {
-  const hexes = palette.map((swatch) => swatch.hex);
-  const ink = hexes[0] ?? "#111111";
-  const paper = hexes[hexes.length - 1] ?? "#f4efe6";
-  const light = (hex: string) => {
-    const h = hex.replace("#", "");
-    if (h.length < 6) return false;
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    return (r * 299 + g * 587 + b * 114) / 1000 > 210;
-  };
-  const accents = hexes.filter((hex) => hex !== ink && hex !== paper && !light(hex));
-  return { ink, paper, accent: accents[0] ?? hexes[1] ?? ink, accent2: accents[1] ?? accents[0] ?? hexes[2] ?? ink };
-}
-
-function Storefront({ taste, col, portfolio, onReset }: { taste: TasteProfile; col: Collection; portfolio: Portfolio | null; onReset: () => void }) {
-  const { ink, accent, accent2, paper } = paletteRoles(taste.palette);
-  const [items, setItems] = useState(col.items);
-  const [busy, setBusy] = useState<string | null>(null);
-  useEffect(() => {
-    let stop = false;
-    post<{ items: { productId: string; imageUrl: string }[] }>("/api/art", {
-      items: col.items.map((item) => ({ productId: item.productId, patternId: item.patternId })),
-    }).then((res) => {
-      if (stop || !res.items) return;
-      setItems((current) => current.map((item) => {
-        const next = res.items.find((shot) => shot.productId === item.productId && shot.imageUrl);
-        return next ? { ...item, imageUrl: next.imageUrl } : item;
-      }));
-    }).catch(() => {});
-    return () => { stop = true; };
-  }, [col]);
-  async function buy(it: CollectionItem) {
-    setBusy(it.productId);
-    try { const { checkoutUrl } = await post<{ checkoutUrl: string }>("/api/checkout", { lines: [{ productId: it.productId, quantity: 1 }] }); window.location.href = checkoutUrl; }
-    catch (e) { alert(String(e)); setBusy(null); }
-  }
-  const mocks = Object.entries(col.mock).filter(([, v]) => v).map(([k]) => k);
-  return (
-    <main style={{ background: paper, color: ink }} className="min-h-screen">
-      {mocks.length > 0 && <div className="bg-black py-1 text-center text-xs text-white/70">Mock mode: {mocks.join(", ")}</div>}
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-        <span className="font-serif text-2xl font-bold tracking-tight">{taste.brandName}</span>
-        <nav className="flex gap-6 text-sm"><a href="#shop">Shop</a><a href="#about">About</a><button onClick={onReset} className="opacity-60">New line ↺</button></nav>
-      </header>
-      <section className="relative mx-auto max-w-6xl overflow-hidden rounded-3xl px-6">
-        <div className="relative grid min-h-[420px] items-end overflow-hidden rounded-3xl p-10 md:p-16" style={{ background: `linear-gradient(135deg, ${accent}, ${accent2})` }}>
-          {col.heroUrl ? <img src={col.heroUrl} alt="" className="absolute inset-0 h-full w-full object-cover" /> :
-            <div className="absolute inset-0 grid grid-cols-3 opacity-40 mix-blend-multiply">{items.slice(0, 3).map((it) => <img key={it.productId} src={it.lifestyleUrl ?? it.imageUrl} alt="" className="h-full w-full object-cover" />)}</div>}
-          <div className="relative max-w-xl" style={{ color: paper }}>
-            <p className="text-xs uppercase tracking-[0.4em]">The debut collection</p>
-            <h1 className="mt-3 font-serif text-5xl leading-none md:text-7xl">{taste.tagline}</h1>
-            <p className="mt-4 text-lg opacity-90">{taste.voice.sample}</p>
-          </div>
-        </div>
-      </section>
-      {portfolio && portfolio.images.length > 0 && (
-        <section className="mx-auto max-w-6xl px-6 pt-8">
-          <p className="mb-3 text-xs uppercase tracking-[0.3em] opacity-60">From the portfolio</p>
-          <ul className="flex gap-3 overflow-x-auto pb-1">
-            {portfolio.images.slice(0, 8).map((src, i) => (
-              <li key={i} className="shrink-0"><img src={src} alt="" className="h-20 w-20 rounded-xl object-cover ring-1 ring-black/10" /></li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <section className="mx-auto max-w-6xl px-6 py-10">
-        <div className="flex flex-wrap gap-2">{taste.motifs.map((m) => <span key={m} className="rounded-full border px-3 py-1 text-xs" style={{ borderColor: ink }}>{m}</span>)}</div>
-      </section>
-      <section id="shop" className="mx-auto grid max-w-6xl gap-8 px-6 pb-20 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map((it) => (
-          <article key={it.productId} className="group overflow-hidden rounded-2xl bg-white/60 shadow-sm ring-1 ring-black/5 transition hover:-translate-y-1 hover:shadow-xl">
-            <div className="relative aspect-square overflow-hidden">
-              <img src={it.lifestyleUrl ?? it.imageUrl} alt={it.name} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
-              <span className="absolute left-3 top-3 rounded-full px-3 py-1 text-[10px] uppercase tracking-widest" style={{ background: ink, color: paper }}>{it.world === "jewelry" ? "Fine jewelry" : it.categoryName}</span>
-            </div>
-            <div className="space-y-3 p-5">
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="font-serif text-xl">{it.name}</h3>
-                {it.price && <span className="font-medium">${it.price.amount}</span>}
-              </div>
-              <p className="text-sm opacity-75">{it.copy}</p>
-              {it.maker && <p className="text-xs opacity-50">Made to order by {it.maker}</p>}
-              <button onClick={() => buy(it)} disabled={!!busy} className="w-full rounded-full py-3 text-sm font-medium transition hover:opacity-90 disabled:opacity-50" style={{ background: accent, color: paper }}>
-                {busy === it.productId ? "Opening checkout…" : "Buy now"}
-              </button>
-            </div>
-          </article>
-        ))}
-      </section>
-      <footer id="about" className="border-t px-6 py-10 text-center text-sm opacity-70" style={{ borderColor: ink }}>
-        Built from {taste.brandName}&apos;s taste.
-      </footer>
-    </main>
   );
 }

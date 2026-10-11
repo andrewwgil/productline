@@ -2,19 +2,8 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { MAX_PORTFOLIO_IMAGES } from "./limits";
 
-const MAX_EDGE = 1568;
-const MAX_BYTES = 4 * 1024 * 1024;
+const NORMAL_EDGE = 1024;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|tiff?)$/i;
-
-const MEDIA = {
-  jpeg: "image/jpeg",
-  jpg: "image/jpeg",
-  png: "image/png",
-  gif: "image/gif",
-  webp: "image/webp",
-} as const;
-
-type Passthrough = "image/jpeg" | "image/png" | "image/webp";
 
 export interface RawImage {
   name: string;
@@ -23,9 +12,11 @@ export interface RawImage {
 
 export interface PreparedImage {
   name: string;
-  mediaType: Passthrough | "image/gif";
+  mediaType: "image/jpeg";
   bytes: Buffer;
   dataUrl: string;
+  width: number;
+  height: number;
 }
 
 export function isZipName(name: string, type = "") {
@@ -60,32 +51,17 @@ export function selectImages(images: RawImage[], cap = MAX_PORTFOLIO_IMAGES): Ra
   return named.filter((item) => kept.has(item.index)).map((item) => item.img);
 }
 
-export async function prepareImage(bytes: Buffer): Promise<Omit<PreparedImage, "name"> | null> {
+/** Rotate, flatten onto white, fit inside 1024px, and re-encode as JPEG. Images smaller than minEdge are dropped. */
+export async function normalizeImage(bytes: Buffer, minEdge = 64): Promise<Omit<PreparedImage, "name"> | null> {
   try {
-    const pipeline = sharp(bytes, { failOn: "none", animated: false, limitInputPixels: 40_000_000 }).rotate();
-    const meta = await pipeline.metadata();
-    if (!meta.width || !meta.height || meta.width < 8 || meta.height < 8) return null;
-    const media = MEDIA[meta.format as keyof typeof MEDIA];
-    const edge = Math.max(meta.width, meta.height);
-    const passthrough = media === "image/jpeg" || media === "image/png" || media === "image/webp";
-    if (passthrough && edge <= MAX_EDGE && bytes.length <= MAX_BYTES) {
-      return { mediaType: media, bytes, dataUrl: `data:${media};base64,${bytes.toString("base64")}` };
-    }
-    let quality = 82;
-    let out = await pipeline
-      .clone()
-      .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality, mozjpeg: true })
-      .toBuffer();
-    while (out.length > MAX_BYTES && quality > 50) {
-      quality -= 10;
-      out = await pipeline
-        .clone()
-        .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality })
-        .toBuffer();
-    }
-    return { mediaType: "image/jpeg", bytes: out, dataUrl: `data:image/jpeg;base64,${out.toString("base64")}` };
+    const { data, info } = await sharp(bytes, { failOn: "none", animated: false, limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize({ width: NORMAL_EDGE, height: NORMAL_EDGE, fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+    if (Math.min(info.width, info.height) < minEdge) return null;
+    return { mediaType: "image/jpeg", bytes: data, dataUrl: `data:image/jpeg;base64,${data.toString("base64")}`, width: info.width, height: info.height };
   } catch {
     return null;
   }
@@ -94,16 +70,65 @@ export async function prepareImage(bytes: Buffer): Promise<Omit<PreparedImage, "
 export async function prepareImages(images: RawImage[]): Promise<PreparedImage[]> {
   const selected = selectImages(images);
   const prepared = await Promise.all(selected.map(async (img) => {
-    const next = await prepareImage(img.bytes);
+    const next = await normalizeImage(img.bytes);
     return next ? { name: img.name, ...next } : null;
   }));
   return prepared.filter((img): img is PreparedImage => img !== null);
+}
+
+/** 8x8 grayscale average hash, so the same artwork at two sizes counts once. */
+async function fingerprint(bytes: Buffer): Promise<string> {
+  const px = await sharp(bytes).resize(8, 8, { fit: "fill" }).grayscale().raw().toBuffer();
+  const mean = px.reduce((sum, v) => sum + v, 0) / px.length;
+  return [...px].map((v) => (v > mean ? "1" : "0")).join("");
+}
+
+/** Fetch scraped image URLs, drop icons and duplicates, and keep the first `cap` real images in page order. */
+export async function imagesFromUrls(urls: string[], cap: number, minEdge = 240): Promise<string[]> {
+  const out: (string | null)[] = new Array(urls.length).fill(null);
+  const prints: (string | null)[] = new Array(urls.length).fill(null);
+  let next = 0;
+  async function worker() {
+    while (next < urls.length) {
+      const i = next++;
+      try {
+        const raw = isSvgSource(urls[i]) ? await svgSourceToPng(urls[i]) : await bytesFromSource(urls[i]);
+        const img = raw && await normalizeImage(raw, minEdge);
+        if (!img) continue;
+        out[i] = img.dataUrl;
+        prints[i] = await fingerprint(img.bytes);
+      } catch { /* unreachable image */ }
+    }
+  }
+  await Promise.all(Array.from({ length: 6 }, worker));
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  out.forEach((dataUrl, i) => {
+    if (!dataUrl || kept.length >= cap) return;
+    const key = prints[i] ?? dataUrl.slice(-64);
+    if (seen.has(key)) return;
+    seen.add(key);
+    kept.push(dataUrl);
+  });
+  return kept;
 }
 
 const SVG_URL = /\.svg(?:$|[?#])/i;
 
 export function isSvgSource(src: string) {
   return src.slice(0, 96).toLowerCase().startsWith("data:image/svg+xml") || SVG_URL.test(src);
+}
+
+const PRIVATE_HOST = /^(localhost|.*\.local|.*\.internal|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|0\.0\.0\.0|\[?::1?\]?|\[?f[cd][0-9a-f]*:.*)$/i;
+
+/** Literal hostnames only; this does not resolve DNS. */
+export function isPublicHttpUrl(value: string | URL): boolean {
+  try {
+    const url = typeof value === "string" ? new URL(value) : value;
+    return (url.protocol === "http:" || url.protocol === "https:") && !PRIVATE_HOST.test(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function bytesFromSource(src: string): Promise<Buffer | null> {
@@ -114,7 +139,7 @@ async function bytesFromSource(src: string): Promise<Buffer | null> {
     if (!raw) return null;
     try { return Buffer.from(decodeURIComponent(raw[1])); } catch { return Buffer.from(raw[1]); }
   }
-  if (!/^https?:\/\//i.test(src)) return null;
+  if (!isPublicHttpUrl(src)) return null;
   const res = await fetch(src, { headers: { "User-Agent": "Mozilla/5.0 productline" }, signal: AbortSignal.timeout(12000) });
   if (!res.ok) return null;
   const bytes = Buffer.from(await res.arrayBuffer());
@@ -145,7 +170,7 @@ export async function rasterPixels(src: string, edge = 96): Promise<{ data: Uint
   }
 }
 
-/** Rasterize an SVG URL or data URL to PNG. Claude and Arcade references cannot take SVG. */
+/** Rasterize an SVG URL or data URL to PNG. GPT and Arcade references cannot take SVG. */
 export async function svgSourceToPng(src: string): Promise<Buffer | null> {
   try {
     const bytes = await bytesFromSource(src);

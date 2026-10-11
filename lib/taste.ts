@@ -1,55 +1,8 @@
-import { isSvgSource, svgSourceToPng } from "./images";
-import { MAX_PORTFOLIO_IMAGES } from "./limits";
 import { paletteFromSources } from "./palette";
 import type { Portfolio, TasteProfile } from "./types";
 
-export const isClaudeMock = () => !process.env.ANTHROPIC_API_KEY;
-const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5";
-
-const SYSTEM = `You are a creative director turning an artist's portfolio into a product line brand.
-Return ONLY JSON matching: {"brandName":string,"tagline":string,"palette":[{"name":string,"hex":"#rrggbb"}] (5 colors, last = background),"motifs":string[] (4-6),"voice":{"adjectives":string[3],"sample":string (2 sentences in the artist's voice)},"patternPrompts":string[3] (Arcade print-pattern prompts, <300 chars, rich in motif/palette/technique),"jewelryPrompt":string,"preferredCategories":string[]}. Arcade has no apparel: never ask for tees, hoodies, or jackets. For clothing, graphics, or streetwear, preferredCategories must be scarf, pillow, napkins or table linens, and lampshade.`;
-
-function visionBlock(src: string): unknown | null {
-  const data = src.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
-  if (data) return { type: "image", source: { type: "base64", media_type: data[1], data: data[2] } };
-  if (isSvgSource(src)) return null;
-  if (/^https?:\/\//i.test(src)) return { type: "image", source: { type: "url", url: src } };
-  return null;
-}
-
-async function visionBlocks(images: string[]): Promise<unknown[]> {
-  const blocks = await Promise.all(images.slice(0, MAX_PORTFOLIO_IMAGES).map(async (src) => {
-    if (!isSvgSource(src)) return visionBlock(src);
-    const png = await svgSourceToPng(src);
-    return png ? { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } } : null;
-  }));
-  return blocks.filter(Boolean);
-}
-
-export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
-  if (!isClaudeMock()) {
-    try { return await claudeTaste(p); }
-    catch (err) { console.warn("Claude taste skipped:", err instanceof Error ? err.message : err); }
-  }
-  return localTaste(p);
-}
-
-async function claudeTaste(p: Portfolio): Promise<TasteProfile> {
-  const content: unknown[] = await visionBlocks(p.images);
-  content.push({ type: "text", text: `Portfolio: ${p.url}\nTitle: ${p.title}\nDescription: ${p.description}\nText: ${p.text.slice(0, 4000)}` });
-  const call = async (withImages: boolean) => {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: MODEL, max_tokens: 1500, system: SYSTEM, messages: [{ role: "user", content: withImages ? content : content.slice(-1) }] }),
-    });
-    if (!res.ok) throw new Error(`Claude ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    const txt: string = data.content?.find((c: { type: string }) => c.type === "text")?.text ?? "";
-    return JSON.parse(txt.slice(txt.indexOf("{"), txt.lastIndexOf("}") + 1)) as TasteProfile;
-  };
-  try { return await call(true); } catch { return call(false); } // retry without images if any image URL is rejected
-}
+/** The rules-only read of a portfolio, used when no OpenAI key is set. */
+export interface RuleTaste { taste: TasteProfile; patternPrompts: string[]; jewelryPrompt: string; preferredCategories: string[] }
 
 const MOTIF_RULES: { test: RegExp; motif: string }[] = [
   { test: /light\s*bulb|lightbulb|bulb[-\s]?head/i, motif: "lightbulb-head" },
@@ -145,7 +98,7 @@ function promptsFor(motifs: string[], palette: { name: string }[]) {
   ].map((prompt) => prompt.slice(0, 300));
 }
 
-export async function localTaste(p: Portfolio): Promise<TasteProfile> {
+export async function localTaste(p: Portfolio): Promise<RuleTaste> {
   const note = [p.description, p.text].filter(Boolean).join("\n");
   const corpus = [p.title, note].filter(Boolean).join("\n");
   const motifs = motifsFrom(note);
@@ -160,14 +113,18 @@ export async function localTaste(p: Portfolio): Promise<TasteProfile> {
     ? `${lead.replace(/[.]+$/, "")}. ${capitalize(motifPhrase)} hold the line in ${colorPhrase}.`
     : `${capitalize(motifPhrase)} lead the line, in ${colorPhrase}. Made to live with.`;
   const apparel = APPAREL.test(corpus) || graphic;
+  const tagline = graphic ? "Street graphics, made to live with." : motifList[0] ? `${capitalize(motifList[0])}, made to live with.` : "Your portfolio, made physical.";
   return {
-    brandName: brandFrom(p),
-    tagline: graphic ? "Street graphics, made to live with." : motifList[0] ? `${capitalize(motifList[0])}, made to live with.` : "Your portfolio, made physical.",
-    palette,
-    motifs: motifList.slice(0, 6),
-    voice: { adjectives: graphic ? ["bold", "graphic", "direct"] : ["considered", "tactile", "clear"], sample },
+    taste: {
+      brandName: brandFrom(p),
+      tagline,
+      brief: `Work built on ${motifPhrase}, in ${colorPhrase}.`,
+      palette,
+      motifs: motifList.slice(0, 6),
+      voice: { adjectives: graphic ? ["bold", "graphic", "direct"] : ["considered", "tactile", "clear"], sample },
+    },
     patternPrompts: promptsFor(motifList, palette),
-    jewelryPrompt: `A signet stamped with ${motifList[0]}, graphic and bold, polished metal with a ${palette[1]?.name.toLowerCase() ?? "enamel"} hit`,
-    preferredCategories: apparel ? ["scarf", "pillow", "napkins", "lampshade", "rug"] : ["scarf", "pillow", "napkins", "lampshade"],
+    jewelryPrompt: `A pendant shaped from ${motifList[0]}, polished metal with a ${palette[1]?.name.toLowerCase() ?? "enamel"} accent`,
+    preferredCategories: apparel ? ["scarves", "decorative pillows", "napkins", "drum lampshades", "tea towels"] : ["scarves", "decorative pillows", "napkins", "drum lampshades"],
   };
 }

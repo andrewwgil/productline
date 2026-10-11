@@ -1,5 +1,10 @@
 import * as cheerio from "cheerio";
+import { imagesFromUrls, isPublicHttpUrl } from "./images";
+import { MAX_SCRAPE_CANDIDATES } from "./limits";
 import type { Portfolio } from "./types";
+
+/** Raw image URLs looked at per site. Icons and duplicates fall out before MAX_SCRAPE_CANDIDATES. */
+const RAW_IMAGE_CAP = 40;
 
 const SKIP = /\.svg($|\?)|logo|icon|sprite|pixel|avatar/i;
 
@@ -32,7 +37,7 @@ async function scrapeStatic(url: URL): Promise<Portfolio> {
     title: $("title").first().text().trim() || url.hostname,
     description: $('meta[name="description"], meta[property="og:description"]').first().attr("content") ?? "",
     text,
-    images: [...imgs].slice(0, 24),
+    images: [...imgs].slice(0, RAW_IMAGE_CAP),
   };
 }
 
@@ -41,7 +46,7 @@ async function withRendered(url: URL, current: Portfolio): Promise<Portfolio> {
   try {
     const { scrapeRendered } = await import("./scrape-browser");
     const rendered = await scrapeRendered(url);
-    const images = [...new Set([...rendered.images, ...current.images])].slice(0, 24);
+    const images = [...new Set([...rendered.images, ...current.images])].slice(0, RAW_IMAGE_CAP);
     const richer = rendered.images.length > current.images.length || rendered.text.trim().length > current.text.trim().length;
     if (!richer) return current;
     return {
@@ -57,7 +62,10 @@ async function withRendered(url: URL, current: Portfolio): Promise<Portfolio> {
   }
 }
 
+/** Scrape a portfolio, then fetch and normalize its images so later steps never re-fetch the site. */
 export async function scrapePortfolio(rawUrl: string): Promise<Portfolio> {
-  const url = new URL(/^https?:\/\//.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
-  return withRendered(url, await scrapeStatic(url));
+  const url = new URL(/^https?:\/\//.test(rawUrl.trim()) ? rawUrl.trim() : `https://${rawUrl.trim()}`);
+  if (!isPublicHttpUrl(url)) throw new Error("Use a public http or https portfolio URL");
+  const found = await withRendered(url, await scrapeStatic(url));
+  return { ...found, images: await imagesFromUrls(found.images, MAX_SCRAPE_CANDIDATES) };
 }

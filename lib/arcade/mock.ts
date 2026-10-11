@@ -8,13 +8,13 @@ const id = () => crypto.randomUUID();
 const DELAY = Number(process.env.MOCK_JOB_DELAY_MS ?? 600);
 
 export const MOCK_CATEGORIES: (Category & { opts: Record<string, string[]>; price: number })[] = [
-  { categoryId: "mock-scarf", name: "Silk Scarf", imageUrl: null, world: "print", opts: { fabric: ["silk twill", "silk chiffon"], size: ["35x35", "26x26"], hem: ["hand-rolled", "machine"] }, price: 185 },
-  { categoryId: "mock-pillow", name: "Throw Pillow", imageUrl: null, world: "print", opts: { fabric: ["linen", "cotton velvet"], size: ["20x20", "18x18"], trim: ["dyed-to-match piping", "tassels", "none"] }, price: 120 },
-  { categoryId: "mock-napkins", name: "Dinner Napkins (set of 4)", imageUrl: null, world: "print", opts: { fabric: ["cotton", "linen"], size: ["20x20"] }, price: 68 },
-  { categoryId: "mock-lampshade", name: "Lampshade", imageUrl: null, world: "print", opts: { shape: ["drum", "empire"], size: ["12in", "16in"] }, price: 210 },
-  { categoryId: "mock-rug", name: "Area Rug", imageUrl: null, world: "print", opts: { material: ["wool", "wool-silk"], size: ["5x8", "8x10"] }, price: 890 },
-  { categoryId: "mock-ring", name: "Signet Ring", imageUrl: null, world: "jewelry", opts: { metal: ["14k gold", "sterling silver"], size: ["6", "7", "8"] }, price: 340 },
-  { categoryId: "mock-pendant", name: "Pendant Necklace", imageUrl: null, world: "jewelry", opts: { metal: ["14k gold", "sterling silver"], chain: ["18in", "20in"] }, price: 260 },
+  { categoryId: "mock-pillow", name: "Decorative Pillows", imageUrl: null, world: "print", opts: { fabric: ["linen", "cotton velvet"], size: ["20x20", "18x18"] }, price: 120 },
+  { categoryId: "mock-scarf", name: "Scarves", imageUrl: null, world: "print", opts: { fabric: ["silk twill", "silk chiffon"], size: ["35x35", "26x26"] }, price: 185 },
+  { categoryId: "mock-napkins", name: "Napkins", imageUrl: null, world: "print", opts: { fabric: ["cotton", "linen"], size: ["20x20"] }, price: 68 },
+  { categoryId: "mock-lampshade", name: "Drum Lampshades", imageUrl: null, world: "print", opts: { size: ["12in", "16in"] }, price: 210 },
+  { categoryId: "mock-towel", name: "Tea Towels", imageUrl: null, world: "print", opts: { fabric: ["linen"] }, price: 38 },
+  { categoryId: "mock-pendant", name: "Pendant Necklace", imageUrl: null, world: "jewelry", category: { categoryId: "mock-necklaces", name: "Necklaces" }, opts: { metal: ["14k gold", "sterling silver"], chain: ["18in", "20in"] }, price: 260 },
+  { categoryId: "mock-ring", name: "Rings", imageUrl: null, world: "jewelry", category: { categoryId: "mock-rings", name: "Rings" }, opts: { metal: ["14k gold", "sterling silver"], size: ["6", "7", "8"] }, price: 340 },
 ];
 
 export function svgArt(seed: string, colors: string[], label = ""): string {
@@ -55,7 +55,7 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
       const selections: Record<string, string> = {};
       const options = Object.entries(c.opts).map(([key, vals]) => {
         selections[key] = sent[key] && vals.includes(sent[key]) ? sent[key] : vals[0];
-        return { key, name: key, values: vals.map((v) => ({ value: v, available: true })) };
+        return { key, label: key, values: vals.map((v, i) => ({ value: v, label: v, isDefault: i === 0, available: true })) };
       });
       const { opts: _o, price: _p, ...base } = c;
       return { ...base, options, selections, canManufacture: true } satisfies CategoryDetail;
@@ -63,7 +63,8 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
     case "patterns/create": {
       const patternId = "pat_" + id().slice(0, 12);
       const colors = (body.colors as string[]) ?? [];
-      store.patterns.set(patternId, { patternId, prompt: body.prompt, imageUrl: svgArt(patternId, colors), colors });
+      const art = svgArt(patternId, colors);
+      store.patterns.set(patternId, { patternId, prompt: body.prompt, imageUrl: art, thumbnailUrl: art, width: 1024, height: 1024, colors });
       const result: Record<string, string> = { patternId };
       if (body.categoryId) result.productId = makeProduct(patternId, String(body.categoryId), {});
       return newJob(body.categoryId ? "product" : "pattern", result);
@@ -74,6 +75,10 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
       return newJob("product", { productId: makeProduct(String(body.patternId), String(body.categoryId), body.selections as Record<string, string>) });
     case "products/get":
       return store.products.get(String(body.productId)) ?? { productId: body.productId };
+    case "references/createUpload":
+      return { uploadId: "upl_" + id().slice(0, 12), uploadUrl: "mock://upload", method: "PUT", requiredHeaders: { "Content-Type": String(body.mediaType) }, expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    case "references/create":
+      return { referenceId: "ref_" + String(body.uploadId).slice(4) };
     case "checkouts/create": {
       const lines = (body.lines as { quantity?: number }[] | undefined) ?? [];
       if (lines.some((line) => Number(line.quantity) === 1) && body.dropShip !== true) throw new Error("quantity 1 requires dropShip: true");
@@ -83,7 +88,7 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
     case "orders/get":
       return { orderId: "ord_" + String(body.checkoutId ?? body.orderId), status: "paid", lines: [] };
     default:
-      if (path.startsWith("refine/") || path.startsWith("patterns/")) {
+      if (path.startsWith("patterns/refine/")) {
         const src = store.patterns.get(String(body.patternId));
         const patternId = "pat_" + id().slice(0, 12);
         store.patterns.set(patternId, { ...(src ?? {}), patternId, imageUrl: svgArt(patternId, (src?.colors as string[]) ?? []), parent: body.patternId });
@@ -97,11 +102,12 @@ function makeProduct(patternId: string, categoryId: string, selections: Record<s
   const c = MOCK_CATEGORIES.find((x) => x.categoryId === categoryId);
   const pat = store.patterns.get(patternId);
   const productId = id();
+  const imageUrl = (pat?.imageUrl as string) ?? svgArt(productId, []);
   store.products.set(productId, {
-    productId, categoryId, patternId, selections, name: c?.name,
-    images: [{ url: (pat?.imageUrl as string) ?? svgArt(productId, []) }],
-    maker: { name: c?.world === "jewelry" ? "Atelier Ochoa, LA" : "Studio Lino, Portugal" },
-    price: { amount: c?.price ?? 100, currency: "USD" },
+    productId, categoryId, patternId, selections, title: c?.name ?? "Product", selectionLabel: Object.values(selections).join(", "),
+    imageUrl, images: [{ url: imageUrl }],
+    maker: { makerId: "mk_mock", name: c?.world === "jewelry" ? "Atelier Ochoa, LA" : "Studio Lino, Portugal" },
+    unitPrice: { amount: String(c?.price ?? 100), currency: "USD" },
   });
   return productId;
 }

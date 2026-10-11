@@ -11,12 +11,12 @@ export async function POST(req: Request) {
   try {
     form = await req.formData();
   } catch {
-    return Response.json({ error: "expected a folder of images or a .zip" }, { status: 400 });
+    return Response.json({ error: "Upload images or a .zip" }, { status: 400 });
   }
 
   const note = String(form.get("note") ?? "");
   const files = form.getAll("file").filter((file): file is File => file instanceof File && file.size > 0);
-  if (!files.length) return Response.json({ error: "upload a folder of images or a .zip" }, { status: 400 });
+  if (!files.length) return Response.json({ error: "Upload images or a .zip" }, { status: 400 });
 
   const raw: RawImage[] = [];
   for (const file of files) {
