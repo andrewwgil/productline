@@ -203,8 +203,24 @@ export default function Home() {
   );
 }
 
+function paletteRoles(palette: { hex: string }[]) {
+  const hexes = palette.map((swatch) => swatch.hex);
+  const ink = hexes[0] ?? "#111111";
+  const paper = hexes[hexes.length - 1] ?? "#f4efe6";
+  const light = (hex: string) => {
+    const h = hex.replace("#", "");
+    if (h.length < 6) return false;
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return (r * 299 + g * 587 + b * 114) / 1000 > 210;
+  };
+  const accents = hexes.filter((hex) => hex !== ink && hex !== paper && !light(hex));
+  return { ink, paper, accent: accents[0] ?? hexes[1] ?? ink, accent2: accents[1] ?? accents[0] ?? hexes[2] ?? ink };
+}
+
 function Storefront({ taste, col, portfolio, onReset }: { taste: TasteProfile; col: Collection; portfolio: Portfolio | null; onReset: () => void }) {
-  const [ink, accent, accent2, , paper] = taste.palette.map((p) => p.hex);
+  const { ink, accent, accent2, paper } = paletteRoles(taste.palette);
   const [busy, setBusy] = useState<string | null>(null);
   async function buy(it: CollectionItem) {
     setBusy(it.productId);

@@ -55,19 +55,20 @@ export function mockTaste(p: Portfolio): TasteProfile {
       : host.split(".")[0].replace(/^\w/, (c) => c.toUpperCase());
   return {
     brandName,
-    tagline: isGil ? "Sketchbook energy, made to live with." : "Your portfolio, made physical.",
+    tagline: isGil ? "Street graphics, made to live with." : "Your portfolio, made physical.",
     palette: [
-      { name: "Ink", hex: "#1b1b1f" }, { name: "Signal Orange", hex: "#ff5a1f" },
-      { name: "Electric Cobalt", hex: "#2643e9" }, { name: "Highlighter", hex: "#e8f54a" }, { name: "Paper", hex: "#f4efe6" },
+      { name: "Ink Black", hex: "#111111" }, { name: "White", hex: "#ffffff" },
+      { name: "Cobalt", hex: "#2643e9" }, { name: "Signal Red", hex: "#ff2d1f" },
+      { name: "Sun Yellow", hex: "#ffd000" }, { name: "Cream", hex: "#f4efe6" },
     ],
-    motifs: ["hand-drawn line characters", "bold vector shapes", "lightbulb sparks", "streetwear graphics", "doodled typography"],
-    voice: { adjectives: ["playful", "optimistic", "punchy"], sample: "Every idea deserves a body. This one just happens to be a pillow." },
+    motifs: ["bold type", "lightbulb-head", "globe", "bird script"],
+    voice: { adjectives: ["bold", "graphic", "direct"], sample: "Ideas leave the page. Bold type, a lightbulb-head, a globe, and bird script go out in ink black, cobalt, signal red, and sun yellow." },
     patternPrompts: [
-      "Playful hand-drawn ink line characters and lightbulb sparks scattered on warm paper, flat Illustrator vector style, signal orange and cobalt accents, seamless repeat",
-      "Bold streetwear-inspired geometric vector shapes, cobalt, signal orange and highlighter yellow on ink black, energetic overlapping composition",
-      "Doodled hand-lettered words and squiggles, sketchbook page aesthetic, ink on paper with orange highlights, tossed layout",
+      "Bold condensed type and a lightbulb-head character, ink black and white with cobalt and signal red hits, sun yellow sparks on cream, flat streetwear graphic, seamless repeat",
+      "A globe and bird script tossed with heavy lettering, cobalt, signal red, and sun yellow on ink black, graphic poster energy, seamless repeat",
+      "Bird script over a simple globe, ink black line on cream with cobalt and signal red accents, streetwear graphic, tossed layout",
     ],
-    jewelryPrompt: "A chunky signet ring engraved with a hand-drawn lightbulb spark, playful and bold, polished gold",
+    jewelryPrompt: "A chunky signet ring stamped with a lightbulb-head, graphic and bold, polished gold with a cobalt enamel hit",
     preferredCategories: ["scarf", "pillow", "napkins", "lampshade", "rug"],
   };
 }
