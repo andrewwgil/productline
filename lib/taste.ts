@@ -1,0 +1,47 @@
+import type { Portfolio, TasteProfile } from "./types";
+
+export const isClaudeMock = () => !process.env.ANTHROPIC_API_KEY;
+const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5";
+
+const SYSTEM = `You are a creative director turning an artist's portfolio into a product line brand.
+Return ONLY JSON matching: {"brandName":string,"tagline":string,"palette":[{"name":string,"hex":"#rrggbb"}] (5 colors, last = background),"motifs":string[] (4-6),"voice":{"adjectives":string[3],"sample":string (2 sentences in the artist's voice)},"patternPrompts":string[3] (Arcade print-pattern prompts, <300 chars, rich in motif/palette/technique),"jewelryPrompt":string,"preferredCategories":string[] (product types that fit, e.g. scarf, pillow, napkins, lampshade, rug)}`;
+
+export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
+  if (isClaudeMock()) return mockTaste(p);
+  const content: unknown[] = p.images.slice(0, 6).map((u) => ({ type: "image", source: { type: "url", url: u } }));
+  content.push({ type: "text", text: `Portfolio: ${p.url}\nTitle: ${p.title}\nDescription: ${p.description}\nText: ${p.text.slice(0, 4000)}` });
+  const call = async (withImages: boolean) => {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: MODEL, max_tokens: 1500, system: SYSTEM, messages: [{ role: "user", content: withImages ? content : content.slice(-1) }] }),
+    });
+    if (!res.ok) throw new Error(`Claude ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    const txt: string = data.content?.find((c: { type: string }) => c.type === "text")?.text ?? "";
+    return JSON.parse(txt.slice(txt.indexOf("{"), txt.lastIndexOf("}") + 1)) as TasteProfile;
+  };
+  try { return await call(true); } catch { return call(false); } // retry without images if any image URL is rejected
+}
+
+export function mockTaste(p: Portfolio): TasteProfile {
+  const host = new URL(p.url).hostname.replace(/^www\./, "");
+  const isGil = host.includes("giveideaslife");
+  return {
+    brandName: isGil ? "Give Ideas Life" : host.split(".")[0].replace(/^\w/, (c) => c.toUpperCase()),
+    tagline: isGil ? "Sketchbook energy, made to live with." : "Your portfolio, made physical.",
+    palette: [
+      { name: "Ink", hex: "#1b1b1f" }, { name: "Signal Orange", hex: "#ff5a1f" },
+      { name: "Electric Cobalt", hex: "#2643e9" }, { name: "Highlighter", hex: "#e8f54a" }, { name: "Paper", hex: "#f4efe6" },
+    ],
+    motifs: ["hand-drawn line characters", "bold vector shapes", "lightbulb sparks", "streetwear graphics", "doodled typography"],
+    voice: { adjectives: ["playful", "optimistic", "punchy"], sample: "Every idea deserves a body. This one just happens to be a pillow." },
+    patternPrompts: [
+      "Playful hand-drawn ink line characters and lightbulb sparks scattered on warm paper, flat Illustrator vector style, signal orange and cobalt accents, seamless repeat",
+      "Bold streetwear-inspired geometric vector shapes, cobalt, signal orange and highlighter yellow on ink black, energetic overlapping composition",
+      "Doodled hand-lettered words and squiggles, sketchbook page aesthetic, ink on paper with orange highlights, tossed layout",
+    ],
+    jewelryPrompt: "A chunky signet ring engraved with a hand-drawn lightbulb spark, playful and bold, polished gold",
+    preferredCategories: ["scarf", "pillow", "napkins", "lampshade", "rug"],
+  };
+}
