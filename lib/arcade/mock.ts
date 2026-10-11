@@ -44,6 +44,8 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
       if (Date.now() >= j.readyAt) { j.status = "succeeded"; j.result = j.final; }
       return { jobId: j.jobId, kind: j.kind, status: j.status, result: j.result };
     }
+    case "models/list":
+      return { items: [] };
     case "categories/list":
       return { items: MOCK_CATEGORIES.map(({ opts: _o, price: _p, ...c }) => c) };
     case "categories/get": {

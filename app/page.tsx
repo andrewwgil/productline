@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { MAX_PORTFOLIO_IMAGES, MAX_REFERENCE_IMAGES } from "@/lib/limits";
 import type { Collection, CollectionItem, Portfolio, TasteProfile } from "@/lib/types";
 
-type Step = "idle" | "scrape" | "taste" | "generate" | "done" | "error";
+type Step = "idle" | "scrape" | "taste" | "review" | "generate" | "done" | "error";
+type StyleModel = { modelId: string; name: string };
 const STEPS: [Step, string][] = [["scrape", "Reading your vision"], ["taste", "Distilling your taste"], ["generate", "Building the business"]];
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif)$/i;
 type FolderAttrs = React.InputHTMLAttributes<HTMLInputElement> & { webkitdirectory?: string; directory?: string };
@@ -74,6 +75,9 @@ export default function Home() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [taste, setTaste] = useState<TasteProfile | null>(null);
   const [col, setCol] = useState<Collection | null>(null);
+  const [models, setModels] = useState<StyleModel[]>([]);
+  const [modelId, setModelId] = useState("");
+  const [referenceIds, setReferenceIds] = useState<string[]>([]);
   const working = step === "scrape" || step === "taste" || step === "generate";
   const shown = step !== "idle" && portfolio?.images.length ? portfolio.images : thumbs;
 
@@ -99,15 +103,30 @@ export default function Home() {
 
   async function finish(p: Portfolio) {
     setPortfolio(p);
+    setStep("taste");
     const tastePromise = post<{ taste: TasteProfile }>("/api/taste", p);
     const refsPromise = post<{ referenceIds: string[] }>("/api/references", { images: p.images.slice(0, MAX_REFERENCE_IMAGES) }).catch(() => ({ referenceIds: [] as string[] }));
-    setStep("taste");
-    const { taste: t } = await tastePromise;
-    setTaste(t);
-    setStep("generate");
-    const { referenceIds } = await refsPromise;
-    setCol(await post<Collection>("/api/collection", { taste: t, referenceIds }));
-    setStep("done");
+    const modelsPromise = fetch("/api/models").then(async (response) => {
+      const data = await response.json().catch(() => ({ items: [] }));
+      const items = Array.isArray(data.items) ? data.items as StyleModel[] : [];
+      return items.filter((model) => model?.modelId && model?.name);
+    }).catch(() => [] as StyleModel[]);
+    const { taste: nextTaste } = await tastePromise;
+    setTaste(nextTaste);
+    setModels(await modelsPromise);
+    setModelId("");
+    setReferenceIds((await refsPromise).referenceIds ?? []);
+    setStep("review");
+  }
+
+  async function buildLine() {
+    if (!taste) return;
+    setErr("");
+    try {
+      setStep("generate");
+      setCol(await post<Collection>("/api/collection", { taste, referenceIds, ...(modelId ? { modelId } : {}) }));
+      setStep("done");
+    } catch (e) { setErr(String(e)); setStep("error"); }
   }
 
   async function runUrl() {
@@ -133,6 +152,23 @@ export default function Home() {
     } catch (e) { setErr(String(e)); setStep("error"); }
   }
 
+  if (step === "review" && taste) return (
+    <TasteReview
+      taste={taste}
+      models={models}
+      modelId={modelId}
+      onModel={setModelId}
+      onBuild={buildLine}
+      onReset={() => setStep("idle")}
+    />
+  );
+  if (step === "generate" && taste) return (
+    <main className="min-h-screen bg-[#0e0e10] text-white">
+      <div className="mx-auto max-w-3xl px-6 py-24">
+        <Making taste={taste} />
+      </div>
+    </main>
+  );
   if (step === "done" && taste && col) return <Storefront taste={taste} col={col} portfolio={portfolio} onReset={() => setStep("idle")} />;
 
   return (
@@ -203,6 +239,55 @@ export default function Home() {
   );
 }
 
+function TasteReview({ taste, models, modelId, onModel, onBuild, onReset }: {
+  taste: TasteProfile;
+  models: StyleModel[];
+  modelId: string;
+  onModel: (id: string) => void;
+  onBuild: () => void;
+  onReset: () => void;
+}) {
+  return (
+    <main className="min-h-screen bg-[#0e0e10] text-white">
+      <div className="mx-auto max-w-3xl px-6 py-24">
+        <p className="text-xs uppercase tracking-[0.4em] text-orange-400">Taste profile</p>
+        <h1 className="mt-4 font-serif text-5xl leading-tight">{taste.brandName}</h1>
+        <p className="mt-4 text-lg text-neutral-300">{taste.tagline}</p>
+        <ul className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {taste.palette.map((swatch) => (
+            <li key={`${swatch.name}-${swatch.hex}`} className="flex items-center gap-3 rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
+              <span className="h-10 w-10 shrink-0 rounded-full ring-1 ring-white/30" style={{ background: swatch.hex }} />
+              <span>
+                <span className="block text-sm">{swatch.name}</span>
+                <span className="block text-xs uppercase tracking-wider text-neutral-500">{swatch.hex}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-6 flex flex-wrap gap-2">
+          {taste.motifs.map((motif) => <span key={motif} className="rounded-full bg-white/10 px-3 py-1 text-sm">{motif}</span>)}
+        </div>
+        <p className="mt-6 font-serif text-2xl leading-snug">{taste.voice.sample}</p>
+        <p className="mt-2 text-sm uppercase tracking-[0.2em] text-neutral-500">{taste.voice.adjectives.join(" · ")}</p>
+        <fieldset className="mt-10">
+          <legend className="text-xs uppercase tracking-[0.3em] text-neutral-500">Style</legend>
+          <p className="mt-2 text-sm text-neutral-400">Your style uses the portfolio and this palette. A Canon model is optional.</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" aria-pressed={modelId === ""} onClick={() => onModel("")} className={`rounded-full px-4 py-2 text-sm ${modelId === "" ? "bg-orange-500 text-black" : "bg-white/10 ring-1 ring-white/15"}`}>Your style</button>
+            {models.map((model) => (
+              <button type="button" key={model.modelId} aria-pressed={modelId === model.modelId} onClick={() => onModel(model.modelId)} className={`rounded-full px-4 py-2 text-sm ${modelId === model.modelId ? "bg-orange-500 text-black" : "bg-white/10 ring-1 ring-white/15"}`}>{model.name}</button>
+            ))}
+          </div>
+        </fieldset>
+        <div className="mt-8 flex items-center gap-4">
+          <button type="button" onClick={onBuild} className="rounded-full bg-orange-500 px-8 py-4 font-medium text-black hover:bg-orange-400">Build the business</button>
+          <button type="button" onClick={onReset} className="text-sm text-neutral-500">Start over</button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 function paletteRoles(palette: { hex: string }[]) {
   const hexes = palette.map((swatch) => swatch.hex);
   const ink = hexes[0] ?? "#111111";
@@ -221,7 +306,21 @@ function paletteRoles(palette: { hex: string }[]) {
 
 function Storefront({ taste, col, portfolio, onReset }: { taste: TasteProfile; col: Collection; portfolio: Portfolio | null; onReset: () => void }) {
   const { ink, accent, accent2, paper } = paletteRoles(taste.palette);
+  const [items, setItems] = useState(col.items);
   const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    let stop = false;
+    post<{ items: { productId: string; imageUrl: string }[] }>("/api/art", {
+      items: col.items.map((item) => ({ productId: item.productId, patternId: item.patternId })),
+    }).then((res) => {
+      if (stop || !res.items) return;
+      setItems((current) => current.map((item) => {
+        const next = res.items.find((shot) => shot.productId === item.productId && shot.imageUrl);
+        return next ? { ...item, imageUrl: next.imageUrl } : item;
+      }));
+    }).catch(() => {});
+    return () => { stop = true; };
+  }, [col]);
   async function buy(it: CollectionItem) {
     setBusy(it.productId);
     try { const { checkoutUrl } = await post<{ checkoutUrl: string }>("/api/checkout", { lines: [{ productId: it.productId, quantity: 1 }] }); window.location.href = checkoutUrl; }
@@ -238,7 +337,7 @@ function Storefront({ taste, col, portfolio, onReset }: { taste: TasteProfile; c
       <section className="relative mx-auto max-w-6xl overflow-hidden rounded-3xl px-6">
         <div className="relative grid min-h-[420px] items-end overflow-hidden rounded-3xl p-10 md:p-16" style={{ background: `linear-gradient(135deg, ${accent}, ${accent2})` }}>
           {col.heroUrl ? <img src={col.heroUrl} alt="" className="absolute inset-0 h-full w-full object-cover" /> :
-            <div className="absolute inset-0 grid grid-cols-3 opacity-40 mix-blend-multiply">{col.items.slice(0, 3).map((it) => <img key={it.productId} src={it.imageUrl} alt="" className="h-full w-full object-cover" />)}</div>}
+            <div className="absolute inset-0 grid grid-cols-3 opacity-40 mix-blend-multiply">{items.slice(0, 3).map((it) => <img key={it.productId} src={it.lifestyleUrl ?? it.imageUrl} alt="" className="h-full w-full object-cover" />)}</div>}
           <div className="relative max-w-xl" style={{ color: paper }}>
             <p className="text-xs uppercase tracking-[0.4em]">The debut collection</p>
             <h1 className="mt-3 font-serif text-5xl leading-none md:text-7xl">{taste.tagline}</h1>
@@ -260,7 +359,7 @@ function Storefront({ taste, col, portfolio, onReset }: { taste: TasteProfile; c
         <div className="flex flex-wrap gap-2">{taste.motifs.map((m) => <span key={m} className="rounded-full border px-3 py-1 text-xs" style={{ borderColor: ink }}>{m}</span>)}</div>
       </section>
       <section id="shop" className="mx-auto grid max-w-6xl gap-8 px-6 pb-20 sm:grid-cols-2 lg:grid-cols-3">
-        {col.items.map((it) => (
+        {items.map((it) => (
           <article key={it.productId} className="group overflow-hidden rounded-2xl bg-white/60 shadow-sm ring-1 ring-black/5 transition hover:-translate-y-1 hover:shadow-xl">
             <div className="relative aspect-square overflow-hidden">
               <img src={it.lifestyleUrl ?? it.imageUrl} alt={it.name} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />

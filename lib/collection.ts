@@ -1,6 +1,5 @@
-import { createPattern, createProduct, getPattern, getProduct, isArcadeMock, listCategories, type Category } from "./arcade";
+import { createPattern, getPattern, getProduct, isArcadeMock, listCategories, createProduct, type Category } from "./arcade";
 import { heroImage, isFalMock, lifestyleShot } from "./fal";
-import { isClaudeMock } from "./taste";
 import type { Collection, CollectionItem, TasteProfile } from "./types";
 
 const patternImage = (p: Record<string, unknown>) =>
@@ -39,23 +38,37 @@ function pickJewelry(cats: Category[], prompt: string): Category | undefined {
 }
 
 function copyFor(t: TasteProfile, category: string, i: number): { name: string; copy: string } {
-  const motif = t.motifs[i % t.motifs.length];
+  const motif = t.motifs[i % Math.max(t.motifs.length, 1)] ?? "the studio mark";
+  const titled = motif.replace(/^\w/, (c) => c.toUpperCase());
+  const colors = t.palette.slice(0, 3).map((swatch) => swatch.name.toLowerCase()).join(", ");
   return {
-    name: `${t.brandName} ${["No. 1", "Spark", "Loop", "Draft", "Signal"][i % 5]} ${category}`,
-    copy: `${t.voice.sample.split(".")[0]}. ${motif.replace(/^\w/, (c) => c.toUpperCase())}, in ${t.palette.slice(0, 3).map((p) => p.name.toLowerCase()).join(", ")}, made to order.`,
+    name: `${t.brandName} ${titled} ${category}`,
+    copy: `${t.brandName} ${category.toLowerCase()} carries ${motif}, in ${colors}. Made to order.`,
   };
 }
 
-export async function generateCollection(t: TasteProfile, opts: { referenceIds?: string[]; maxPrint?: number } = {}): Promise<Collection> {
-  const colors = t.palette.map((p) => p.hex);
+export async function refreshArtwork(items: { productId: string; patternId: string }[]) {
+  return Promise.all(items.map(async (item) => {
+    const [product, pattern] = await Promise.all([
+      getProduct(item.productId).catch(() => null),
+      item.patternId ? getPattern(item.patternId).catch(() => null) : Promise.resolve(null),
+    ]);
+    const fromPattern = pattern ? patternImage(pattern as Record<string, unknown>) : "";
+    return { productId: item.productId, imageUrl: product?.images?.[0]?.url || fromPattern };
+  }));
+}
+
+export async function generateCollection(t: TasteProfile, opts: { referenceIds?: string[]; modelId?: string; maxPrint?: number } = {}): Promise<Collection> {
+  const colors = t.palette.map((swatch) => swatch.hex).filter((hex) => /^#[0-9a-f]{6}$/i.test(hex));
   const cats = await listCategories();
   const printCats = pickCategories(cats, preferencesForArcade(t), opts.maxPrint ?? 4);
   const jewelry = pickJewelry(cats, t.jewelryPrompt);
 
-  // 1) patterns, in parallel
+  // 1) print patterns. Jewelry never receives references, colors, or a model.
   const refs = opts.referenceIds?.filter(Boolean).slice(0, 3);
+  const modelId = opts.modelId?.trim() || undefined;
   const patterns = await Promise.all(t.patternPrompts.map((prompt) =>
-    createPattern({ prompt, colors, ...(refs?.length ? { referenceIds: refs } : {}) }).then((j) => String(j.result?.patternId))));
+    createPattern({ prompt, colors, ...(refs?.length ? { referenceIds: refs } : {}), ...(modelId ? { modelId } : {}) }).then((j) => String(j.result?.patternId))));
   const patternImgs = await Promise.all(patterns.map(async (id) => patternImage(await getPattern(id) as Record<string, unknown>)));
 
   // 2) print products across categories (rotate patterns)
@@ -79,9 +92,20 @@ export async function generateCollection(t: TasteProfile, opts: { referenceIds?:
     });
   }
 
-  // 4) Fal media (optional)
-  const [heroUrl, ...shots] = await Promise.all([heroImage(t.brandName, t.tagline, colors), ...items.map((it) => lifestyleShot(it.categoryName, t.brandName, t.motifs))]);
-  items.forEach((it, i) => { if (shots[i]) it.lifestyleUrl = shots[i]!; });
+  // Re-fetch pattern and product images. Arcade URLs are short-lived.
+  const fresh = await refreshArtwork(items.map((item) => ({ productId: item.productId, patternId: item.patternId })));
+  items.forEach((item) => {
+    const next = fresh.find((shot) => shot.productId === item.productId);
+    if (next?.imageUrl) item.imageUrl = next.imageUrl;
+  });
 
-  return { items, heroUrl: heroUrl ?? undefined, mock: { arcade: isArcadeMock(), claude: isClaudeMock(), fal: isFalMock() } };
+  // Fal lifestyle shots only when FAL_KEY is set. Otherwise the storefront uses Arcade art.
+  let heroUrl: string | undefined;
+  if (!isFalMock()) {
+    const [hero, ...shots] = await Promise.all([heroImage(t.brandName, t.tagline, colors), ...items.map((it) => lifestyleShot(it.categoryName, t.brandName, t.motifs))]);
+    heroUrl = hero ?? undefined;
+    items.forEach((it, i) => { if (shots[i]) it.lifestyleUrl = shots[i]!; });
+  }
+
+  return { items, heroUrl, mock: { arcade: isArcadeMock(), claude: false, fal: false } };
 }

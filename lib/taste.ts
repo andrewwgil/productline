@@ -1,5 +1,6 @@
 import { isSvgSource, svgSourceToPng } from "./images";
 import { MAX_PORTFOLIO_IMAGES } from "./limits";
+import { paletteFromSources } from "./palette";
 import type { Portfolio, TasteProfile } from "./types";
 
 export const isClaudeMock = () => !process.env.ANTHROPIC_API_KEY;
@@ -26,7 +27,14 @@ async function visionBlocks(images: string[]): Promise<unknown[]> {
 }
 
 export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
-  if (isClaudeMock()) return mockTaste(p);
+  if (!isClaudeMock()) {
+    try { return await claudeTaste(p); }
+    catch (err) { console.warn("Claude taste skipped:", err instanceof Error ? err.message : err); }
+  }
+  return localTaste(p);
+}
+
+async function claudeTaste(p: Portfolio): Promise<TasteProfile> {
   const content: unknown[] = await visionBlocks(p.images);
   content.push({ type: "text", text: `Portfolio: ${p.url}\nTitle: ${p.title}\nDescription: ${p.description}\nText: ${p.text.slice(0, 4000)}` });
   const call = async (withImages: boolean) => {
@@ -43,32 +51,123 @@ export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
   try { return await call(true); } catch { return call(false); } // retry without images if any image URL is rejected
 }
 
-export function mockTaste(p: Portfolio): TasteProfile {
+const MOTIF_RULES: { test: RegExp; motif: string }[] = [
+  { test: /light\s*bulb|lightbulb|bulb[-\s]?head/i, motif: "lightbulb-head" },
+  { test: /\bglobe\b|world map|\batlas\b/i, motif: "globe" },
+  { test: /\bbirds?\b/i, motif: "bird" },
+  { test: /\bscript\b|calligraphy|hand[-\s]?letter/i, motif: "script" },
+  { test: /\btype\b|typography|lettering|wordmark|\bfonts?\b/i, motif: "bold type" },
+  { test: /floral|botanical|\bflowers?\b|\bblooms?\b/i, motif: "floral" },
+  { test: /\bstripes?\b/i, motif: "stripes" },
+  { test: /geometric|\bgrids?\b|\bcircles?\b/i, motif: "geometry" },
+  { test: /\bwaves?\b|\bocean\b|\bwater\b/i, motif: "water" },
+  { test: /\bsuns?\b|\bstars?\b/i, motif: "sun" },
+  { test: /portrait|\bfaces?\b|\bfigures?\b/i, motif: "figures" },
+  { test: /animals?|creatures?|\bcats?\b|\bdogs?\b/i, motif: "creatures" },
+  { test: /abstract/i, motif: "abstract marks" },
+  { test: /\bicons?\b|\bsymbols?\b/i, motif: "symbols" },
+  { test: /landscape|\bmountains?\b/i, motif: "landscape" },
+  { test: /streetwear|\bgraphics?\b|\bposters?\b/i, motif: "graphic marks" },
+];
+
+const STOP = new Set(["the", "a", "an", "and", "or", "of", "for", "with", "from", "your", "this", "that", "into", "made", "artboard", "image", "img", "png", "jpg", "jpeg", "svg", "webp", "copy", "untitled", "layer", "group", "final", "portfolio", "uploaded", "files", "file", "www", "http", "https"]);
+
+function capitalize(value: string) {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
+export function motifsFrom(text: string): string[] {
+  const found: string[] = [];
+  for (const rule of MOTIF_RULES) {
+    if (rule.test.test(text) && !found.includes(rule.motif)) found.push(rule.motif);
+  }
+  if (found.includes("bird") && found.includes("script")) {
+    const rest = found.filter((motif) => motif !== "bird" && motif !== "script");
+    found.splice(0, found.length, "bird script", ...rest);
+  }
+  const phrases = new Map<string, number>();
+  for (const chunk of text.split(/[.\n]/)) {
+    const head = chunk.split(/[—–|:]/)[0]?.replace(/\.[a-z0-9]{2,4}$/i, "").trim() ?? "";
+    const words = head.split(/\s+/).map((word) => word.replace(/[^a-z0-9'-]/gi, "")).filter(Boolean);
+    if (words.length < 2 || words.length > 4) continue;
+    if (words.some((word) => STOP.has(word.toLowerCase()) && words.length === 2)) continue;
+    if (words.some((word) => /artboard|untitled|\d{3,}/i.test(word))) continue;
+    const phrase = words.join(" ").toLowerCase();
+    const compact = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const phraseKey = compact(phrase);
+    if (phrase.length > 32 || found.some((motif) => {
+      const key = compact(motif);
+      return phraseKey.includes(key) || key.includes(phraseKey);
+    })) continue;
+    phrases.set(phrase, (phrases.get(phrase) ?? 0) + 1);
+  }
+  const extra = [...phrases.entries()].filter(([, n]) => n >= 1).sort((a, b) => b[1] - a[1]).map(([phrase]) => phrase);
+  for (const phrase of extra) {
+    if (found.length >= 6) break;
+    if (!found.includes(phrase)) found.push(phrase);
+  }
+  return found.slice(0, 6);
+}
+
+function brandFrom(p: Portfolio) {
   let host = "portfolio";
   try { host = new URL(p.url).hostname.replace(/^www\./, ""); } catch { /* upload urls are still absolute */ }
-  const isGil = host.includes("giveideaslife");
   const uploadedTitle = p.title.trim();
-  const brandName = isGil
-    ? "Give Ideas Life"
-    : host === "upload.local"
-      ? (uploadedTitle && uploadedTitle !== "Uploaded portfolio" ? uploadedTitle.slice(0, 48) : "Studio Upload")
-      : host.split(".")[0].replace(/^\w/, (c) => c.toUpperCase());
+  if (host.includes("giveideaslife")) return "Give Ideas Life";
+  if (host === "upload.local") return uploadedTitle && uploadedTitle !== "Uploaded portfolio" ? uploadedTitle.slice(0, 48) : "Studio Upload";
+  const stem = host.split(".")[0] ?? host;
+  return stem.replace(/^\w/, (c) => c.toUpperCase());
+}
+
+const GRAPHIC = /type|script|lightbulb|globe|bird|graphic|poster|street/i;
+const APPAREL = /\b(apparel|clothing|garments?|streetwear|graphics?|merch|tees?|t-?shirts?|shirts?|hoodies?|sweatshirts?|jackets?|outerwear)\b/i;
+
+const PAPER_FALLBACK = [
+  { name: "Ink Black", hex: "#1a1a1a" },
+  { name: "Graphite", hex: "#4a4744" },
+  { name: "Clay", hex: "#a56b45" },
+  { name: "Stone", hex: "#b7aea2" },
+  { name: "Cream", hex: "#f4efe6" },
+];
+
+function promptsFor(motifs: string[], palette: { name: string }[]) {
+  const ink = palette[0]?.name.toLowerCase() ?? "ink";
+  const accent = palette[1]?.name.toLowerCase() ?? "an accent";
+  const accent2 = palette[2]?.name.toLowerCase() ?? accent;
+  const paper = palette[palette.length - 1]?.name.toLowerCase() ?? "cream";
+  const first = motifs[0] ?? "a drawn mark";
+  const second = motifs[1] ?? first;
+  const third = motifs[2] ?? second;
+  return [
+    `${capitalize(first)} and ${second}, ${ink} with ${accent} and ${accent2} on ${paper}, flat graphic, seamless repeat`,
+    `A tossed repeat of ${second} and ${third}, ${accent} and ${accent2} on ${ink}, poster energy, seamless repeat`,
+    `${capitalize(third)} over ${first}, ${ink} line on ${paper} with ${accent} accents, seamless repeat`,
+  ].map((prompt) => prompt.slice(0, 300));
+}
+
+export async function localTaste(p: Portfolio): Promise<TasteProfile> {
+  const note = [p.description, p.text].filter(Boolean).join("\n");
+  const corpus = [p.title, note].filter(Boolean).join("\n");
+  const motifs = motifsFrom(note);
+  const motifList = motifs.length ? motifs : ["drawn marks"];
+  const extracted = await paletteFromSources(p.images);
+  const palette = extracted.length >= 2 ? extracted : PAPER_FALLBACK;
+  const graphic = GRAPHIC.test(corpus) || motifList.some((motif) => GRAPHIC.test(motif));
+  const colorPhrase = palette.slice(0, 4).map((swatch) => swatch.name.toLowerCase()).join(", ");
+  const motifPhrase = motifList.slice(0, 3).join(", ");
+  const lead = p.description.trim().split(/[.\n]/).map((line) => line.trim()).find((line) => line.length > 18 && line.length < 140);
+  const sample = lead
+    ? `${lead.replace(/[.]+$/, "")}. ${capitalize(motifPhrase)} hold the line in ${colorPhrase}.`
+    : `${capitalize(motifPhrase)} lead the line, in ${colorPhrase}. Made to live with.`;
+  const apparel = APPAREL.test(corpus) || graphic;
   return {
-    brandName,
-    tagline: isGil ? "Street graphics, made to live with." : "Your portfolio, made physical.",
-    palette: [
-      { name: "Ink Black", hex: "#111111" }, { name: "White", hex: "#ffffff" },
-      { name: "Cobalt", hex: "#2643e9" }, { name: "Signal Red", hex: "#ff2d1f" },
-      { name: "Sun Yellow", hex: "#ffd000" }, { name: "Cream", hex: "#f4efe6" },
-    ],
-    motifs: ["bold type", "lightbulb-head", "globe", "bird script"],
-    voice: { adjectives: ["bold", "graphic", "direct"], sample: "Ideas leave the page. Bold type, a lightbulb-head, a globe, and bird script go out in ink black, cobalt, signal red, and sun yellow." },
-    patternPrompts: [
-      "Bold condensed type and a lightbulb-head character, ink black and white with cobalt and signal red hits, sun yellow sparks on cream, flat streetwear graphic, seamless repeat",
-      "A globe and bird script tossed with heavy lettering, cobalt, signal red, and sun yellow on ink black, graphic poster energy, seamless repeat",
-      "Bird script over a simple globe, ink black line on cream with cobalt and signal red accents, streetwear graphic, tossed layout",
-    ],
-    jewelryPrompt: "A chunky signet ring stamped with a lightbulb-head, graphic and bold, polished gold with a cobalt enamel hit",
-    preferredCategories: ["scarf", "pillow", "napkins", "lampshade", "rug"],
+    brandName: brandFrom(p),
+    tagline: graphic ? "Street graphics, made to live with." : motifList[0] ? `${capitalize(motifList[0])}, made to live with.` : "Your portfolio, made physical.",
+    palette,
+    motifs: motifList.slice(0, 6),
+    voice: { adjectives: graphic ? ["bold", "graphic", "direct"] : ["considered", "tactile", "clear"], sample },
+    patternPrompts: promptsFor(motifList, palette),
+    jewelryPrompt: `A signet stamped with ${motifList[0]}, graphic and bold, polished metal with a ${palette[1]?.name.toLowerCase() ?? "enamel"} hit`,
+    preferredCategories: apparel ? ["scarf", "pillow", "napkins", "lampshade", "rug"] : ["scarf", "pillow", "napkins", "lampshade"],
   };
 }

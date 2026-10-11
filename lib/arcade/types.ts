@@ -8,6 +8,7 @@ export interface Job {
   error?: { message: string } | null;
 }
 export interface Category { categoryId: string; name: string; imageUrl: string | null; world: World }
+export interface ArcadeModel { modelId: string; name: string }
 export interface OptionValue { value: string; label?: string; available: boolean }
 export interface CategoryOption { key: string; name?: string; values: OptionValue[] }
 export interface CategoryDetail extends Category {

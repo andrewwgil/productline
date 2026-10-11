@@ -1,5 +1,5 @@
 import { mockCall } from "./mock";
-import type { Category, CategoryDetail, Checkout, CreatePatternInput, Job, Order, Pattern, Product, RefineOp } from "./types";
+import type { ArcadeModel, Category, CategoryDetail, Checkout, CreatePatternInput, Job, Order, Pattern, Product, RefineOp } from "./types";
 
 const BASE = process.env.ARCADE_BASE_URL ?? "https://platform.arcade.ai/v1";
 export const ARCADE_USER_AGENT = "productline/1.0";
@@ -33,11 +33,24 @@ export async function waitForJob(jobId: string, { intervalMs = isArcadeMock() ? 
 }
 
 export const listCategories = async () => (await call<{ items: Category[] }>("categories/list", {})).items;
+export const listModels = async () => (await call<{ items: ArcadeModel[] }>("models/list", {})).items;
 export const getCategory = (categoryId: string, selections: Record<string, string> = {}) => call<CategoryDetail>("categories/get", { categoryId, selections });
 
+/** Jewelry is categoryId + prompt only. Print may include references, palette colors, and a Canon modelId. */
+export function patternBody(input: CreatePatternInput, requestId = rid("pat")): Record<string, unknown> {
+  if (input.categoryId) return { requestId, prompt: input.prompt, categoryId: input.categoryId };
+  const referenceIds = input.referenceIds?.filter(Boolean).slice(0, 3);
+  return {
+    requestId,
+    prompt: input.prompt,
+    ...(referenceIds?.length ? { referenceIds } : {}),
+    ...(input.colors?.length ? { colors: input.colors } : {}),
+    ...(input.modelId ? { modelId: input.modelId } : {}),
+  };
+}
+
 export async function createPattern(input: CreatePatternInput): Promise<Job> {
-  const { requestId = rid("pat"), ...rest } = input;
-  const job = await call<Job>("patterns/create", { requestId, ...rest });
+  const job = await call<Job>("patterns/create", patternBody(input, input.requestId));
   return waitForJob(job.jobId);
 }
 export const getPattern = (patternId: string) => call<Pattern>("patterns/get", { patternId });

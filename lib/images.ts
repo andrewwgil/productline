@@ -121,6 +121,30 @@ async function bytesFromSource(src: string): Promise<Buffer | null> {
   return bytes.length > 8 * 1024 * 1024 ? null : bytes;
 }
 
+/** Downscale a portfolio image to raw RGB. Transparent pixels are flattened onto white. */
+export async function rasterPixels(src: string, edge = 96): Promise<{ data: Uint8Array; width: number; height: number } | null> {
+  try {
+    const bytes = await bytesFromSource(src);
+    if (!bytes) return null;
+    const { data, info } = await sharp(bytes, {
+      failOn: "none",
+      animated: false,
+      limitInputPixels: 40_000_000,
+      ...(isSvgSource(src) ? { density: 144 } : {}),
+    })
+      .rotate()
+      .resize({ width: edge, height: edge, fit: "inside", withoutEnlargement: true, kernel: "nearest" })
+      .flatten({ background: "#ffffff" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    if (!info.width || !info.height || info.channels < 3 || data.length < 3) return null;
+    return { data, width: info.width, height: info.height };
+  } catch {
+    return null;
+  }
+}
+
 /** Rasterize an SVG URL or data URL to PNG. Claude and Arcade references cannot take SVG. */
 export async function svgSourceToPng(src: string): Promise<Buffer | null> {
   try {
