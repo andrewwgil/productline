@@ -4,7 +4,8 @@ import type { Portfolio } from "./types";
 const SKIP = /\.svg($|\?)|logo|icon|sprite|pixel|avatar/i;
 
 function isThin(portfolio: Portfolio) {
-  return portfolio.images.length <= 1 || portfolio.text.trim().length < 80;
+  // JS-rendered portfolios (giveideaslife.com) come back as a single og:image and almost no text.
+  return portfolio.images.length <= 1 && portfolio.text.trim().length < 80;
 }
 
 async function scrapeStatic(url: URL): Promise<Portfolio> {

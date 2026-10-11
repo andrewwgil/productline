@@ -122,13 +122,13 @@ export default function Home() {
                 disabled={working}
                 className="sr-only"
                 aria-label="Upload a folder of images"
-                onChange={(e) => { takeFolder(e.target.files); e.target.value = ""; }}
+                onChange={(e) => { const picked = e.target.files; if (picked?.length) takeFolder(picked); e.target.value = ""; }}
                 {...({ webkitdirectory: "", directory: "" } as FolderAttrs)}
               />
             </label>
             <label className="cursor-pointer rounded-full bg-white/10 px-5 py-3 text-sm ring-1 ring-white/15 hover:bg-white/15">
               Choose .zip
-              <input type="file" accept=".zip,application/zip" disabled={working} className="sr-only" aria-label="Upload a zip of images" onChange={(e) => { takeZip(e.target.files); e.target.value = ""; }} />
+              <input type="file" accept=".zip,application/zip" disabled={working} className="sr-only" aria-label="Upload a zip of images" onChange={(e) => { const picked = e.target.files; if (picked?.length) takeZip(picked); e.target.value = ""; }} />
             </label>
             {fileLabel && <span className="text-sm text-neutral-400">{fileLabel}</span>}
           </div>
