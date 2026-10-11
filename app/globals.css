@@ -59,11 +59,12 @@ body {
   to { background-position: -200% 0; }
 }
 
-.making {
-  background: linear-gradient(100deg, #f8f9f6 30%, #eff2ed 50%, #f8f9f6 70%);
+.making-veil {
+  background: linear-gradient(100deg, rgba(253, 252, 251, 0.25) 30%, rgba(255, 255, 255, 0.6) 50%, rgba(253, 252, 251, 0.25) 70%);
   background-size: 200% 100%;
   animation: making-sheen 2.4s linear infinite;
 }
+
 
 @keyframes hero-float {
   0%, 100% { transform: translateY(0) rotate(var(--rot, 0deg)); }
@@ -147,7 +148,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hero-item, .kai-dot, .making, .explore-in, .voice-line, .rotating-word { animation: none; }
+  .hero-item, .kai-dot, .making-veil, .explore-in, .voice-line, .rotating-word { animation: none; }
   .hero-item:hover,
   .hero-item:focus-visible { transform: translateY(-8px) rotate(var(--rot, 0deg)); }
 }

@@ -103,7 +103,7 @@ export async function localTaste(p: Portfolio): Promise<RuleTaste> {
   const corpus = [p.title, note].filter(Boolean).join("\n");
   const motifs = motifsFrom(note);
   const motifList = motifs.length ? motifs : ["drawn marks"];
-  const extracted = await paletteFromSources(p.images);
+  const extracted = await paletteFromSources(p.images, 8);
   const palette = extracted.length >= 2 ? extracted : PAPER_FALLBACK;
   const graphic = GRAPHIC.test(corpus) || motifList.some((motif) => GRAPHIC.test(motif));
   const colorPhrase = palette.slice(0, 4).map((swatch) => swatch.name.toLowerCase()).join(", ");

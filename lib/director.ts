@@ -6,6 +6,7 @@ import { localTaste } from "./taste";
 import type { LinePlan, PlanItem, Portfolio, TasteProfile } from "./types";
 
 const HEX = /^#[0-9a-f]{6}$/i;
+const PALETTE_COUNT = 8;
 
 const SYSTEM = `You are the creative director of a made-to-order product studio. An artist hands you their portfolio. You read the work closely and plan a small product line that Arcade will manufacture.
 
@@ -14,7 +15,7 @@ Look hard at the images: medium and technique (ink line, gouache, risograph, pho
 brandName: the artist's or studio's name if the text or images show it, otherwise a short name drawn from the work.
 tagline: under 8 words.
 brief: two sentences on what the work looks and feels like, the way a curator would say it.
-palette: exactly 5 colors that are truly in the work. Darkest ink first, background last. Use the measured pixel palette as ground truth for hex values, and give each color an evocative name.
+palette: exactly 8 colors that are truly in the work, including the smaller accents, not only the dominant fields. Darkest ink first, background last. Use the measured pixel palette as ground truth for hex values, and give each color an evocative name.
 motifs: 4 to 6 short concrete motifs that recur in the work.
 voice: 3 adjectives, and a 2-sentence sample in the artist's own voice.
 
@@ -71,7 +72,43 @@ function pickJewelry(cats: Category[], prompt: string): Category | undefined {
   return jewelry.find((c) => c.name.toLowerCase().split(/\s+/).some((word) => word.length > 3 && text.includes(word.replace(/s$/, "")))) ?? jewelry[0];
 }
 
+/** Arcade's category photo for prints. Jewelry has none in the API, so it uses Arcade's jewelry tiles in /public/categories. */
+export function previewFor(c: Category): string | null {
+  if (c.world === "print") return c.imageUrl;
+  const group = `${c.category?.name ?? ""} ${c.name}`.toLowerCase();
+  if (group.includes("earring")) return "/categories/earrings.jpg";
+  if (group.includes("necklace") || group.includes("pendant")) return "/categories/necklaces.jpg";
+  return "/categories/rings.jpg";
+}
+
 const titled = (value: string) => value.replace(/^\w/, (c) => c.toUpperCase());
+
+function hexRgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function sameColor(a: string, b: string) {
+  const [ar, ag, ab] = hexRgb(a);
+  const [br, bg, bb] = hexRgb(b);
+  return (ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2 < 28 * 28;
+}
+
+/** Named colors first, then measured swatches that are actually different, up to eight. */
+function takePalette(named: { name: string; hex: string }[], measured: { name: string; hex: string }[]) {
+  const out: { name: string; hex: string }[] = [];
+  for (const swatch of [...named, ...measured]) {
+    const hex = swatch.hex.trim();
+    if (!HEX.test(hex) || out.some((have) => sameColor(have.hex, hex))) continue;
+    out.push({ name: swatch.name.trim() || hex, hex });
+    if (out.length >= PALETTE_COUNT) break;
+  }
+  return out.sort((a, b) => {
+    const [ar, ag, ab] = hexRgb(a.hex);
+    const [br, bg, bb] = hexRgb(b.hex);
+    return (ar * 299 + ag * 587 + ab * 114) - (br * 299 + bg * 587 + bb * 114);
+  });
+}
 
 async function rulesPlan(p: Portfolio, cats: Category[]): Promise<LinePlan> {
   const rules = await localTaste(p);
@@ -85,6 +122,7 @@ async function rulesPlan(p: Portfolio, cats: Category[]): Promise<LinePlan> {
       name: `${titled(motif)} ${c.name.replace(/s$/, "")}`,
       copy: `${taste.brandName} ${c.name.toLowerCase()} carrying ${motif}, in ${colors}. Made to order.`,
       referenceIndexes: rotateReferences(i, p.images.length),
+      previewUrl: previewFor(c),
     };
   });
   const jewelry = pickJewelry(cats, rules.jewelryPrompt);
@@ -93,6 +131,7 @@ async function rulesPlan(p: Portfolio, cats: Category[]): Promise<LinePlan> {
     name: `${titled(taste.motifs[0] ?? "Studio")} ${jewelry.name.replace(/s$/, "")}`,
     copy: `${taste.brandName}'s ${taste.motifs[0] ?? "mark"}, cast as a ${jewelry.name.toLowerCase().replace(/s$/, "")}. Made to order.`,
     referenceIndexes: [],
+    previewUrl: previewFor(jewelry),
   });
   return { taste, items, director: "rules" };
 }
@@ -118,12 +157,12 @@ async function openAIPlan(p: Portfolio, cats: Category[], measured: { name: stri
 
   const out = await chatJSON<Directed>(SYSTEM, content, "product_line", schema(print.map((c) => c.name), jewelry.map((c) => c.name)));
 
-  const palette = out.palette.filter((c) => HEX.test(c.hex)).slice(0, 5);
+  const palette = takePalette(out.palette, measured);
   const taste: TasteProfile = {
     brandName: out.brandName.trim() || "Studio",
     tagline: out.tagline.trim(),
     brief: out.brief.trim(),
-    palette: palette.length >= 3 ? palette : measured.slice(0, 5),
+    palette: palette.length >= 3 ? palette : measured.slice(0, PALETTE_COUNT),
     motifs: out.motifs.map((m) => m.trim()).filter(Boolean).slice(0, 6),
     voice: { adjectives: out.voice.adjectives.slice(0, 3), sample: out.voice.sample.trim() },
   };
@@ -139,6 +178,7 @@ async function openAIPlan(p: Portfolio, cats: Category[], measured: { name: stri
       key: `print-${items.length}`, world: "print", categoryId: c.categoryId, categoryName: c.name,
       prompt: product.prompt.trim(), name: product.name.trim(), copy: product.copy.trim(),
       referenceIndexes: refs.length ? refs : rotateReferences(items.length, p.images.length),
+      previewUrl: previewFor(c),
     });
   }
   if (!items.length) throw new Error("OpenAI planned no usable print products");
@@ -146,6 +186,7 @@ async function openAIPlan(p: Portfolio, cats: Category[], measured: { name: stri
   if (j) items.push({
     key: "jewelry-0", world: "jewelry", categoryId: j.categoryId, categoryName: j.name,
     prompt: out.jewelry.prompt.trim(), name: out.jewelry.name.trim(), copy: out.jewelry.copy.trim(), referenceIndexes: [],
+    previewUrl: previewFor(j),
   });
   return { taste, items, director: "openai" };
 }
@@ -156,7 +197,7 @@ export async function directLine(p: Portfolio): Promise<LinePlan & { notice?: st
   const cats = await listCategories();
   if (!isOpenAIConfigured()) return rulesPlan(portfolio, cats);
   try {
-    const measured = await paletteFromSources(portfolio.images, 6);
+    const measured = await paletteFromSources(portfolio.images, PALETTE_COUNT);
     return await openAIPlan(portfolio, cats, measured);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

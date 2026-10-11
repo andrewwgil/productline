@@ -64,7 +64,7 @@ function kmeans(pixels: RGB[], k: number): { rgb: RGB; count: number }[] {
         best = i;
       }
     }
-    if (bestD < 32 * 32) break;
+    if (bestD < 20 * 20) break;
     seeds.push([...pixels[best]]);
   }
 
@@ -101,13 +101,13 @@ function kmeans(pixels: RGB[], k: number): { rgb: RGB; count: number }[] {
 export function paletteFromPixels(pixels: RGB[], count = 6): { name: string; hex: string }[] {
   if (pixels.length < 8) return [];
 
-  const clusters = kmeans(pixels, Math.max(count, 6))
+  const clusters = kmeans(pixels, Math.max(count + 3, 8))
     .filter((cluster) => cluster.count >= Math.max(4, pixels.length * 0.015))
     .sort((a, b) => b.count - a.count);
 
   const merged: { rgb: RGB; count: number }[] = [];
   for (const cluster of clusters) {
-    const hit = merged.find((item) => dist2(item.rgb, cluster.rgb) < 26 * 26);
+    const hit = merged.find((item) => dist2(item.rgb, cluster.rgb) < 18 * 18);
     if (!hit) {
       merged.push({ rgb: [...cluster.rgb], count: cluster.count });
       continue;
@@ -122,9 +122,9 @@ export function paletteFromPixels(pixels: RGB[], count = 6): { name: string; hex
   }
 
   merged.sort((a, b) => b.count - a.count);
-  const floor = Math.max(8, Math.round(pixels.length * 0.04));
+  const floor = Math.max(8, Math.round(pixels.length * 0.02));
   const popular = merged.filter((cluster) => cluster.count >= floor);
-  const picked = (popular.length >= 3 ? popular : merged).slice(0, count);
+  const picked = (popular.length >= count ? popular : merged).slice(0, count);
   picked.sort((a, b) => luminance(a.rgb) - luminance(b.rgb));
 
   if (picked.length && luminance(picked[picked.length - 1].rgb) < 200) {

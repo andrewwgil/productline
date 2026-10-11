@@ -23,6 +23,8 @@ export interface PlanItem {
   copy: string;
   /** Indexes into the selected portfolio images. Print only. */
   referenceIndexes: number[];
+  /** A blank photo of the category, shown before Arcade makes the product. */
+  previewUrl: string | null;
 }
 
 export interface LinePlan { taste: TasteProfile; items: PlanItem[]; director: "openai" | "rules" }

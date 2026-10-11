@@ -6,8 +6,7 @@ import { MAX_PORTFOLIO_IMAGES } from "@/lib/limits";
 import type { ItemStatus } from "@/lib/line";
 import type { LinePlan, PlanItem, Portfolio, ProductCard } from "@/lib/types";
 
-type Stage = "start" | "pick" | "reading" | "review" | "line";
-type StyleModel = { modelId: string; name: string };
+type Stage = "start" | "pick" | "reading" | "line";
 type Plan = LinePlan & { notice?: string };
 type Slot = { item: PlanItem; state: "starting" | "making" | "ready" | "failed"; jobId?: string; startedAt: number; product?: ProductCard; error?: string };
 
@@ -38,15 +37,13 @@ export default function Home() {
   const [selected, setSelected] = useState<number[]>([]);
   const [fromUpload, setFromUpload] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [models, setModels] = useState<StyleModel[]>([]);
-  const [modelId, setModelId] = useState("");
   const [slots, setSlots] = useState<Slot[]>([]);
   const refs = useRef<Promise<(string | null)[]> | null>(null);
   const [referenceIds, setReferenceIds] = useState<(string | null)[]>([]);
   const chosen = useMemo(() => (portfolio ? selected.map((i) => portfolio.images[i]).filter(Boolean) : []), [portfolio, selected]);
 
   function reset() {
-    setStage("start"); setBusy(""); setErr(""); setNotice(""); setPortfolio(null); setSelected([]); setPlan(null); setSlots([]); setModelId("");
+    setStage("start"); setBusy(""); setErr(""); setNotice(""); setPortfolio(null); setSelected([]); setPlan(null); setSlots([]);
     refs.current = null;
     setReferenceIds([]);
     try { sessionStorage.removeItem(SAVE_KEY); } catch { /* storage blocked */ }
@@ -115,12 +112,11 @@ export default function Home() {
     setErr(""); setBusy(""); setStage("reading");
     refs.current = post<{ referenceIds: (string | null)[] }>("/api/references", { images }).then((r) => r.referenceIds).catch(() => images.map(() => null));
     refs.current.then(setReferenceIds);
-    const modelsPromise = fetch("/api/models").then((r) => r.json()).then((d) => (Array.isArray(d.items) ? d.items as StyleModel[] : [])).catch(() => []);
     try {
       const next = await post<Plan>("/api/direct", { ...p, images });
       setPlan(next);
-      setModels(await modelsPromise);
-      setStage("review");
+      setSlots([]);
+      setStage("line");
     } catch (e) {
       setErr(message(e));
       setStage(upload ? "start" : "pick");
@@ -132,7 +128,7 @@ export default function Home() {
     const referenceIds = item.referenceIndexes.map((i) => ids[i]).filter((id): id is string => Boolean(id));
     try {
       const { jobId } = await post<{ jobId: string }>("/api/make", {
-        item, referenceIds, colors: all.taste.palette.map((c) => c.hex), motifs: all.taste.motifs, modelId: item.world === "print" ? modelId : "",
+        item, referenceIds, colors: all.taste.palette.map((c) => c.hex), motifs: all.taste.motifs, modelId: "",
       });
       setSlots((cur) => cur.map((s) => s.item.key === item.key ? { ...s, state: "making", jobId } : s));
     } catch (e) {
@@ -144,7 +140,6 @@ export default function Home() {
     if (!plan) return;
     const now = Date.now();
     setSlots(plan.items.map((item) => ({ item, state: "starting", startedAt: now })));
-    setStage("line");
     plan.items.forEach((item) => start(item, plan));
   }
 
@@ -189,19 +184,18 @@ export default function Home() {
     />
   );
   if (stage === "reading") return <Reading images={chosen} />;
-  if (stage === "review" && plan) return (
-    <Review
+  if (stage === "line" && plan) return (
+    <Studio
       plan={plan}
+      slots={slots}
       images={chosen}
-      models={models}
-      modelId={modelId}
-      onModel={setModelId}
       onBuild={build}
-      onBack={fromUpload ? reset : () => setStage("pick")}
-      backLabel={fromUpload ? "Start over" : "Change images"}
+      onRetry={retry}
+      onBack={fromUpload || !portfolio?.url ? reset : () => setStage("pick")}
+      backLabel={fromUpload || !portfolio?.url ? "Start over" : "Change images"}
+      onReset={reset}
     />
   );
-  if (stage === "line" && plan) return <Line plan={plan} slots={slots} images={chosen} onRetry={retry} onReset={reset} />;
 
   return (
     <main className="relative min-h-[max(100dvh,700px)] overflow-hidden bg-paper text-ink md:min-h-[max(100dvh,860px)]">
@@ -308,7 +302,7 @@ function PickImages({ portfolio, selected, onToggle, onRead, onReset, err }: {
         <p className="text-sm text-muted">{host}</p>
         <h1 className="mt-2 font-serif text-[clamp(2rem,4.3vw,3.25rem)] font-normal leading-[1.05] tracking-[-0.04em]">Pick the work that sounds like you.</h1>
         <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted">
-          Choose up to {MAX_PORTFOLIO_IMAGES}. GPT reads these to find your taste, and Arcade uses them as references for every print.
+          Choose up to {MAX_PORTFOLIO_IMAGES}.
         </p>
         <ul className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {portfolio.images.map((src, i) => {
@@ -366,92 +360,17 @@ function Reading({ images }: { images: string[] }) {
   );
 }
 
-function Swatches({ palette }: { palette: { name: string; hex: string }[] }) {
-  return (
-    <ul className="flex flex-wrap gap-3">
-      {palette.map((swatch) => (
-        <li key={`${swatch.name}-${swatch.hex}`} className="flex items-center gap-2.5 rounded-full border border-[#e6e5e1] bg-white py-1.5 pl-1.5 pr-4">
-          <span className="h-7 w-7 shrink-0 rounded-full ring-1 ring-black/10" style={{ background: swatch.hex }} />
-          <span className="text-[13px] font-semibold tracking-[-0.02em]">{swatch.name}</span>
-          <span className="text-xs uppercase text-muted">{swatch.hex}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Review({ plan, images, models, modelId, onModel, onBuild, onBack, backLabel }: {
-  plan: Plan; images: string[]; models: StyleModel[]; modelId: string; onModel: (id: string) => void; onBuild: () => void; onBack: () => void; backLabel: string;
+/** One screen for the line: each column previews its blank Arcade product, then shows it being made, then the finished product. */
+function Studio({ plan, slots, images, onBuild, onRetry, onBack, backLabel, onReset }: {
+  plan: Plan; slots: Slot[]; images: string[]; onBuild: () => void; onRetry: (key: string) => void; onBack: () => void; backLabel: string; onReset: () => void;
 }) {
-  const { taste } = plan;
-  const chip = (on: boolean) => `rounded-full px-4 py-2 text-sm font-semibold tracking-[-0.01em] ${on ? "bg-pill text-white" : "border border-field bg-white text-subtle hover:text-ink"}`;
-  return (
-    <main className="min-h-dvh bg-paper text-ink">
-      <Header right={<TextButton onClick={onBack}>{backLabel}</TextButton>} />
-      <div className="mx-auto max-w-5xl px-6 pb-24 pt-8">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green">Your taste{plan.director === "openai" ? ", read by GPT" : ""}</p>
-        <h1 className="mt-4 font-serif text-[clamp(2.75rem,6vw,5rem)] font-normal leading-[0.96] tracking-[-0.045em]">{taste.brandName}</h1>
-        <p className="mt-3 font-serif text-2xl tracking-[-0.02em] text-subtle">{taste.tagline}</p>
-        {taste.brief && <p className="mt-6 max-w-2xl text-base leading-relaxed text-[#1c1f23]">{taste.brief}</p>}
-        {plan.notice && <p className="mt-4 max-w-2xl rounded-[14px] border border-line bg-white px-4 py-3 text-sm text-muted">{plan.notice}</p>}
-
-        <div className="mt-8"><Swatches palette={taste.palette} /></div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {taste.motifs.map((motif) => <span key={motif} className="rounded-full bg-chip px-3 py-1 text-xs text-chip-ink">{motif}</span>)}
-        </div>
-
-        <h2 className="mt-14 font-serif text-[28px] font-normal tracking-[-0.03em]">What Arcade will make</h2>
-        <ol className="mt-4 divide-y divide-line border-y border-line">
-          {plan.items.map((item) => (
-            <li key={item.key} className="grid gap-4 py-6 md:grid-cols-[1fr_auto] md:items-start">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{item.categoryName}{item.world === "jewelry" ? " · Jewelry" : ""}</p>
-                <h3 className="mt-1.5 font-serif text-2xl font-normal tracking-[-0.03em]">{item.name}</h3>
-                <p className="mt-1 text-sm text-subtle">{item.copy}</p>
-                <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer font-semibold text-subtle hover:text-ink">Arcade prompt</summary>
-                  <p className="mt-2 max-w-2xl leading-relaxed text-muted">{item.prompt}</p>
-                </details>
-              </div>
-              {item.world === "print" ? (
-                <ul className="flex gap-2" aria-label="Reference images">
-                  {item.referenceIndexes.map((i) => images[i] && (
-                    <li key={i} className="h-16 w-16 overflow-hidden rounded-[10px] border border-[#e6e5e1] bg-white"><img src={images[i]} alt={`Reference ${i + 1}`} className="h-full w-full object-cover" /></li>
-                  ))}
-                </ul>
-              ) : <p className="text-xs text-muted md:max-w-40 md:text-right">Arcade designs jewelry from the prompt alone.</p>}
-            </li>
-          ))}
-        </ol>
-
-        {models.length > 0 && (
-          <fieldset className="mt-10">
-            <legend className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Print style</legend>
-            <p className="mt-2 text-sm text-muted">Your images and palette guide every print. You can also lean on one of Arcade&apos;s style models.</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" aria-pressed={modelId === ""} onClick={() => onModel("")} className={chip(modelId === "")}>Your style</button>
-              {models.map((model) => (
-                <button type="button" key={model.modelId} aria-pressed={modelId === model.modelId} onClick={() => onModel(model.modelId)} className={chip(modelId === model.modelId)}>{model.name}</button>
-              ))}
-            </div>
-          </fieldset>
-        )}
-
-        <div className="mt-12 flex items-center gap-5">
-          <button type="button" onClick={onBuild} className="h-12 rounded-full bg-pill px-8 text-[15px] font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover">Build the line</button>
-          <p className="text-sm text-muted">{plan.items.length} products, usually 1 to 3 minutes.</p>
-        </div>
-      </div>
-    </main>
-  );
-}
-
-function Line({ plan, slots, images, onRetry, onReset }: { plan: Plan; slots: Slot[]; images: string[]; onRetry: (key: string) => void; onReset: () => void }) {
   const { taste } = plan;
   const [now, setNow] = useState(() => Date.now());
   const [buying, setBuying] = useState<string | null>(null);
   const [buyErr, setBuyErr] = useState("");
   const [fresh, setFresh] = useState<Record<string, ProductCard>>({});
+  const [focused, setFocused] = useState<number | null>(null);
+  const building = slots.length > 0;
   const pending = slots.filter((s) => s.state === "starting" || s.state === "making").length;
   const ready = slots.filter((s) => s.state === "ready").length;
   useEffect(() => {
@@ -460,12 +379,31 @@ function Line({ plan, slots, images, onRetry, onReset }: { plan: Plan; slots: Sl
     return () => clearInterval(t);
   }, [pending]);
 
+  useEffect(() => {
+    if (focused == null) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFocused(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focused]);
+
   async function buy(productId: string) {
     setBuying(productId); setBuyErr("");
+    // Open during the click so the browser always allows the new tab, then point it at checkout.
+    const tab = window.open("about:blank", "_blank");
     try {
       const { checkoutUrl } = await post<{ checkoutUrl: string }>("/api/checkout", { lines: [{ productId, quantity: 1 }] });
-      window.location.href = checkoutUrl;
-    } catch (e) { setBuyErr(message(e)); setBuying(null); }
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = checkoutUrl;
+      } else {
+        window.open(checkoutUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      tab?.close();
+      setBuyErr(message(e));
+    } finally {
+      setBuying(null);
+    }
   }
 
   // Arcade image URLs expire. Re-fetch a card once if its image stops loading.
@@ -477,84 +415,145 @@ function Line({ plan, slots, images, onRetry, onReset }: { plan: Plan; slots: Sl
 
   return (
     <main className="min-h-dvh bg-paper text-ink">
-      <header className="mx-auto flex h-20 max-w-6xl items-center justify-between px-6">
-        <span className="font-serif text-2xl tracking-[-0.03em]">{taste.brandName}</span>
-        <TextButton onClick={onReset}>New line</TextButton>
-      </header>
-
-      <section className="mx-auto max-w-6xl px-6 pt-10">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-green">The debut line</p>
-        <h1 className="mt-4 max-w-4xl font-serif text-[clamp(2.75rem,6.4vw,5.5rem)] font-normal leading-[0.96] tracking-[-0.045em]">{taste.tagline}</h1>
-        <p className="mt-6 max-w-2xl text-base leading-relaxed text-[#1c1f23]">{taste.voice.sample || taste.brief}</p>
-        <div className="mt-6 flex gap-1.5" aria-label="Palette">
-          {taste.palette.map((c) => <span key={c.hex + c.name} title={c.name} className="h-3 w-10 rounded-full ring-1 ring-black/5" style={{ background: c.hex }} />)}
+      <Header right={building ? <TextButton onClick={onReset}>New line</TextButton> : <TextButton onClick={onBack}>{backLabel}</TextButton>} />
+      <section className="mx-auto max-w-6xl px-6 pt-8">
+        <h1 className="font-serif text-[clamp(2.75rem,6vw,5rem)] font-normal leading-[0.96] tracking-[-0.045em]">{taste.brandName}</h1>
+        {images.length > 0 && (
+          <ul className="mt-6 flex gap-3 overflow-x-auto" aria-label="From the portfolio">
+            {images.map((src, i) => (
+              <li key={i} className="h-20 w-20 shrink-0 overflow-hidden rounded-[12px] border border-[#e6e5e1] bg-white">
+                <button type="button" onClick={() => setFocused(i)} aria-label={`View portfolio image ${i + 1} larger`} className="block h-full w-full cursor-zoom-in">
+                  <img src={src} alt="" className="h-full w-full object-cover" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-10 max-w-2xl">
+          {taste.brief && <p className="text-base leading-relaxed text-[#1c1f23]">{taste.brief}</p>}
+          {plan.notice && <p className={`${taste.brief ? "mt-4 " : ""}rounded-[14px] border border-line bg-white px-4 py-3 text-sm text-muted`}>{plan.notice}</p>}
         </div>
-        <p className="mt-8 flex items-center gap-2 text-sm text-muted" aria-live="polite">
-          {pending ? <><Dots />Arcade is making {pending} of {slots.length} products</> : `${ready} of ${slots.length} products ready`}
-        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {taste.motifs.map((motif) => <span key={motif} className="rounded-full bg-chip px-3 py-1 text-xs text-chip-ink">{motif}</span>)}
+        </div>
+
+        <div className="mt-12 flex min-h-12 flex-wrap items-center justify-center gap-x-5 gap-y-3" aria-live="polite">
+          {!building ? (
+            <button type="button" onClick={onBuild} className="h-12 min-w-80 rounded-full bg-pill px-12 text-[15px] font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover">Build the line</button>
+          ) : pending ? (
+            <p className="flex items-center gap-2 text-sm text-muted"><Dots />Arcade is making {pending} of {slots.length} products</p>
+          ) : (
+            <p className="text-sm text-muted">{ready} of {slots.length} products ready</p>
+          )}
+        </div>
         {buyErr && <p className="mt-2 text-[13px] text-ink" role="alert">{buyErr}</p>}
       </section>
 
-      <section className="mx-auto grid max-w-6xl gap-x-8 gap-y-12 px-6 py-12 sm:grid-cols-2 lg:grid-cols-4">
-        {slots.map((slot) => {
-          const product = slot.product ? fresh[slot.product.productId] ?? slot.product : undefined;
+      <section className="mx-auto grid max-w-6xl gap-x-8 gap-y-12 px-6 py-10 sm:grid-cols-2 lg:grid-cols-4">
+        {plan.items.map((item) => {
+          const slot = slots.find((s) => s.item.key === item.key);
+          const product = slot?.product ? fresh[slot.product.productId] ?? slot.product : undefined;
           const price = money(product?.price ?? null);
+          const working = slot?.state === "starting" || slot?.state === "making";
+          const refs = item.referenceIndexes.map((i) => images[i]).filter(Boolean);
           return (
-            <article key={slot.item.key} className="flex flex-col">
+            <article key={item.key} className="flex flex-col">
               <div className="relative aspect-square overflow-hidden rounded-[18px] border border-[#e6e5e1] bg-white">
-                {product?.imageUrl ? (
-                  <img src={product.imageUrl} alt={slot.item.name} onError={() => refresh(product.productId)} className="explore-in h-full w-full object-cover" />
-                ) : slot.state === "failed" ? (
-                  <div className="grid h-full place-items-center p-6 text-center">
-                    <div>
-                      <p className="text-sm text-ink">Arcade couldn&apos;t make this one.</p>
-                      <p className="mt-1 line-clamp-4 text-xs text-muted">{slot.error}</p>
-                      <button type="button" onClick={() => onRetry(slot.item.key)} className="mt-4 h-9 rounded-full bg-pill px-4 text-[13px] font-semibold text-white hover:bg-pill-hover">Try again</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="making absolute inset-0 grid place-items-center">
-                    {slot.item.world === "print" && slot.item.referenceIndexes[0] !== undefined && images[slot.item.referenceIndexes[0]] && (
-                      <img src={images[slot.item.referenceIndexes[0]]} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-25 blur-xl" />
-                    )}
-                    <div className="relative text-center">
+                {item.previewUrl ? (
+                  <img src={item.previewUrl} alt={`A blank ${item.categoryName.toLowerCase()}`} className={`absolute inset-0 h-full w-full object-cover transition duration-700 ${working ? "scale-105 blur-[6px]" : ""}`} />
+                ) : refs[0] && (
+                  <img src={refs[0]} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-25 blur-xl" />
+                )}
+
+                {!product && !working && slot?.state !== "failed" && (
+                  <Inspiration refs={refs} palette={taste.palette} jewelry={item.world === "jewelry"} />
+                )}
+
+                {working && slot && (
+                  <div className="making-veil explore-in absolute inset-0 grid place-items-center">
+                    <div className="text-center">
                       <Dots />
-                      <p className="mt-3 text-[13px] font-semibold tracking-[-0.01em]">{slot.state === "starting" ? "Sending to Arcade" : slot.item.world === "jewelry" ? "Designing the piece" : "Designing the print"}</p>
+                      <p className="mt-3 text-[13px] font-semibold tracking-[-0.01em]">{slot.state === "starting" ? "Sending to Arcade" : item.world === "jewelry" ? "Designing the piece" : "Designing the print"}</p>
                       <p className="mt-1 text-xs tabular-nums text-muted">{clock(now - slot.startedAt)}</p>
                     </div>
                   </div>
                 )}
+
+                {slot?.state === "failed" && (
+                  <div className="absolute inset-0 grid place-items-center bg-white/90 p-6 text-center">
+                    <div>
+                      <p className="text-sm text-ink">Arcade couldn&apos;t make this one.</p>
+                      <p className="mt-1 line-clamp-4 text-xs text-muted">{slot.error}</p>
+                      <button type="button" onClick={() => onRetry(item.key)} className="mt-4 h-9 rounded-full bg-pill px-4 text-[13px] font-semibold text-white hover:bg-pill-hover">Try again</button>
+                    </div>
+                  </div>
+                )}
+
+                {product?.imageUrl && (
+                  <img src={product.imageUrl} alt={item.name} onError={() => refresh(product.productId)} className="explore-in absolute inset-0 h-full w-full object-cover" />
+                )}
               </div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted">{slot.item.categoryName}</p>
+              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted">{item.categoryName}</p>
               <div className="mt-1 flex items-baseline justify-between gap-3">
-                <h3 className="font-serif text-[22px] font-normal leading-tight tracking-[-0.03em]">{slot.item.name}</h3>
+                <h3 className="font-serif text-[22px] font-normal leading-tight tracking-[-0.03em]">{item.name}</h3>
                 {price && <span className="text-[15px] text-[#252b37]">{price}</span>}
               </div>
-              <p className="mt-1.5 text-sm leading-relaxed text-subtle">{slot.item.copy}</p>
+              <p className="mt-1.5 text-sm leading-relaxed text-subtle">{item.copy}</p>
               {product?.maker && <p className="mt-1 text-xs text-muted">Made to order by {product.maker}</p>}
+              {!building && (
+                <details className="mt-3 text-sm">
+                  <summary className="cursor-pointer font-semibold text-subtle hover:text-ink">Arcade prompt</summary>
+                  <p className="mt-2 leading-relaxed text-muted">{item.prompt}</p>
+                </details>
+              )}
               {product && (
-                <button type="button" onClick={() => buy(product.productId)} disabled={!!buying} className="mt-4 h-10 rounded-full bg-pill text-sm font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover disabled:opacity-50">
-                  {buying === product.productId ? "Opening checkout" : "Buy on Arcade"}
-                </button>
+                <>
+                  <button type="button" className="mt-4 h-10 rounded-full border border-ink bg-transparent text-sm font-semibold tracking-[-0.01em] text-ink hover:bg-ink/5">Add to Shopify</button>
+                  <button type="button" onClick={() => buy(product.productId)} disabled={!!buying} className="mt-2 h-10 rounded-full bg-pill text-sm font-semibold tracking-[-0.01em] text-white hover:bg-pill-hover disabled:opacity-50">
+                    {buying === product.productId ? "Opening checkout" : "Buy on Arcade"}
+                  </button>
+                </>
               )}
             </article>
           );
         })}
       </section>
 
-      {images.length > 0 && (
-        <section className="mx-auto max-w-6xl border-t border-line px-6 py-10">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">From the portfolio</p>
-          <ul className="mt-4 flex gap-3 overflow-x-auto pb-1">
-            {images.map((src, i) => <li key={i} className="h-20 w-20 shrink-0 overflow-hidden rounded-[12px] border border-[#e6e5e1] bg-white"><img src={src} alt="" className="h-full w-full object-cover" /></li>)}
-          </ul>
-        </section>
+      {focused != null && images[focused] && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-[#141716]/55 p-6 backdrop-blur-[2px]" onClick={() => setFocused(null)}>
+          <img
+            src={images[focused]}
+            alt={`Portfolio image ${focused + 1}`}
+            className="explore-in max-h-[85vh] max-w-[min(92vw,960px)] rounded-[18px] bg-white object-contain shadow-[0_24px_80px_rgba(20,23,22,.28)]"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
       )}
+
     </main>
   );
 }
 
-// Placed like the reference mock: framing the bottom of the page, clear of the URL field and drop zone.
+/** The work guiding a product, fanned in the corner of its blank photo. Jewelry has no references, so it shows the palette. */
+function Inspiration({ refs, palette, jewelry }: { refs: string[]; palette: { name: string; hex: string }[]; jewelry: boolean }) {
+  const tiles = jewelry || !refs.length ? palette.slice(0, 4).map((c) => ({ key: c.hex + c.name, bg: c.hex, src: "" })) : refs.slice(0, 3).map((src, i) => ({ key: `${i}`, bg: "#fff", src }));
+  const mid = (tiles.length - 1) / 2;
+  return (
+    <div className="absolute bottom-3 left-3 flex items-end gap-2">
+      <ul className="flex -space-x-4" aria-label={jewelry ? "Palette guiding this piece" : "Images guiding this print"}>
+        {tiles.map((t, i) => (
+          <li key={t.key} className="h-12 w-12 overflow-hidden rounded-[9px] border-2 border-white shadow-[0_6px_16px_rgba(20,23,22,.18)]" style={{ background: t.bg, rotate: `${(i - mid) * 6}deg` }}>
+            {t.src && <img src={t.src} alt="" className="h-full w-full object-cover" />}
+          </li>
+        ))}
+      </ul>
+      <span className="mb-0.5 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-1 text-[11px] font-semibold tracking-[-0.01em] text-subtle shadow-[0_1px_4px_rgba(20,23,22,.12)] backdrop-blur">
+        {jewelry ? "From your palette" : "From your work"}
+      </span>
+    </div>
+  );
+}
+
 const HERO_SLOTS: { className: string; rot: string; delay: string; mobile?: boolean }[] = [
   { className: "left-[-2%] top-[52%] w-[min(17vw,250px)]", rot: "-8deg", delay: "0s" },
   { className: "left-[18%] bottom-[11%] w-[min(10vw,150px)]", rot: "-6deg", delay: "-2.2s", mobile: true },

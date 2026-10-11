@@ -1,5 +1,5 @@
 import { mockCall } from "./mock";
-import type { ArcadeModel, Category, Checkout, CreatePatternInput, Job, Order, Pattern, Product } from "./types";
+import type { Category, Checkout, CreatePatternInput, Job, Order, Pattern, Product } from "./types";
 
 const BASE = process.env.ARCADE_BASE_URL ?? "https://platform.arcade.ai/v1";
 export const ARCADE_USER_AGENT = "productline/1.0";
@@ -51,7 +51,6 @@ export async function waitForJob(jobId: string, { intervalMs = isArcadeMock() ? 
 }
 
 export const listCategories = async () => (await call<{ items: Category[] }>("categories/list", {})).items;
-export const listModels = async () => (await call<{ items: ArcadeModel[] }>("models/list", {})).items;
 
 /** Jewelry is prompt + categoryId only. Print may add references, palette colors, and a modelId. */
 export function patternBody(input: CreatePatternInput, requestId = rid("pat")): Record<string, unknown> {
