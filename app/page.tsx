@@ -23,6 +23,23 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return d;
 }
 
+/** Open Arcade checkout in a new tab. The tab opens during the click so popup blockers allow it. */
+async function checkout(productId: string, quantity: number) {
+  const tab = window.open("about:blank", "_blank");
+  try {
+    const { checkoutUrl } = await post<{ checkoutUrl: string }>("/api/checkout", { lines: [{ productId, quantity }] });
+    if (tab) {
+      tab.opener = null;
+      tab.location.href = checkoutUrl;
+    } else {
+      window.open(checkoutUrl, "_blank", "noopener,noreferrer");
+    }
+  } catch (e) {
+    tab?.close();
+    throw e;
+  }
+}
+
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const money = (price: ProductCard["price"]) => price ? new Intl.NumberFormat("en-US", { style: "currency", currency: price.currency || "USD", maximumFractionDigits: price.amount % 1 ? 2 : 0 }).format(price.amount) : null;
 const clock = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
@@ -38,6 +55,7 @@ export default function Home() {
   const [fromUpload, setFromUpload] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [slots, setSlots] = useState<Slot[]>([]);
+  const [detail, setDetail] = useState<string | null>(null);
   const refs = useRef<Promise<(string | null)[]> | null>(null);
   const [referenceIds, setReferenceIds] = useState<(string | null)[]>([]);
   const chosen = useMemo(() => (portfolio ? selected.map((i) => portfolio.images[i]).filter(Boolean) : []), [portfolio, selected]);
@@ -150,7 +168,23 @@ export default function Home() {
     start(slot.item, plan);
   }
 
-  useEffect(() => { window.scrollTo(0, 0); }, [stage]);
+  useEffect(() => { window.scrollTo(0, 0); }, [stage, detail]);
+
+  // A product page lives at #<item key>, so the browser back button returns to the line.
+  useEffect(() => {
+    const sync = () => setDetail(window.location.hash.slice(1) || null);
+    sync();
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+  function openProduct(key: string) {
+    window.history.pushState(null, "", `#${key}`);
+    setDetail(key);
+  }
+  function closeProduct() {
+    if (window.location.hash) window.history.back();
+    else setDetail(null);
+  }
 
   // Poll Arcade jobs while any product is still being made.
   const making = slots.some((s) => s.state === "making");
@@ -184,6 +218,8 @@ export default function Home() {
     />
   );
   if (stage === "reading") return <Reading images={chosen} />;
+  const open = stage === "line" && detail ? slots.find((s) => s.item.key === detail && s.state === "ready" && s.product) : undefined;
+  if (open?.product && plan) return <ProductPage key={open.item.key} item={open.item} product={open.product} palette={plan.taste.palette} onBack={closeProduct} />;
   if (stage === "line" && plan) return (
     <Studio
       plan={plan}
@@ -194,6 +230,7 @@ export default function Home() {
       onBack={fromUpload || !portfolio?.url ? reset : () => setStage("pick")}
       backLabel={fromUpload || !portfolio?.url ? "Start over" : "Change images"}
       onReset={reset}
+      onOpen={openProduct}
     />
   );
 
@@ -361,8 +398,8 @@ function Reading({ images }: { images: string[] }) {
 }
 
 /** One screen for the line: each column previews its blank Arcade product, then shows it being made, then the finished product. */
-function Studio({ plan, slots, images, onBuild, onRetry, onBack, backLabel, onReset }: {
-  plan: Plan; slots: Slot[]; images: string[]; onBuild: () => void; onRetry: (key: string) => void; onBack: () => void; backLabel: string; onReset: () => void;
+function Studio({ plan, slots, images, onBuild, onRetry, onBack, backLabel, onReset, onOpen }: {
+  plan: Plan; slots: Slot[]; images: string[]; onBuild: () => void; onRetry: (key: string) => void; onBack: () => void; backLabel: string; onReset: () => void; onOpen: (key: string) => void;
 }) {
   const { taste } = plan;
   const [now, setNow] = useState(() => Date.now());
@@ -388,22 +425,9 @@ function Studio({ plan, slots, images, onBuild, onRetry, onBack, backLabel, onRe
 
   async function buy(productId: string) {
     setBuying(productId); setBuyErr("");
-    // Open during the click so the browser always allows the new tab, then point it at checkout.
-    const tab = window.open("about:blank", "_blank");
-    try {
-      const { checkoutUrl } = await post<{ checkoutUrl: string }>("/api/checkout", { lines: [{ productId, quantity: 1 }] });
-      if (tab) {
-        tab.opener = null;
-        tab.location.href = checkoutUrl;
-      } else {
-        window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-      }
-    } catch (e) {
-      tab?.close();
-      setBuyErr(message(e));
-    } finally {
-      setBuying(null);
-    }
+    try { await checkout(productId, 1); }
+    catch (e) { setBuyErr(message(e)); }
+    finally { setBuying(null); }
   }
 
   // Arcade image URLs expire. Re-fetch a card once if its image stops loading.
@@ -490,12 +514,16 @@ function Studio({ plan, slots, images, onBuild, onRetry, onBack, backLabel, onRe
                 )}
 
                 {product?.imageUrl && (
-                  <img src={product.imageUrl} alt={item.name} onError={() => refresh(product.productId)} className="explore-in absolute inset-0 h-full w-full object-cover" />
+                  <button type="button" onClick={() => onOpen(item.key)} aria-label={`View ${item.name}`} className="group absolute inset-0">
+                    <img src={product.imageUrl} alt={item.name} onError={() => refresh(product.productId)} className="explore-in h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                  </button>
                 )}
               </div>
               <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted">{item.categoryName}</p>
               <div className="mt-1 flex items-baseline justify-between gap-3">
-                <h3 className="font-serif text-[22px] font-normal leading-tight tracking-[-0.03em]">{item.name}</h3>
+                <h3 className="font-serif text-[22px] font-normal leading-tight tracking-[-0.03em]">
+                  {product ? <button type="button" onClick={() => onOpen(item.key)} className="text-left hover:underline hover:decoration-line hover:underline-offset-4">{item.name}</button> : item.name}
+                </h3>
                 {price && <span className="text-[15px] text-[#252b37]">{price}</span>}
               </div>
               <p className="mt-1.5 text-sm leading-relaxed text-subtle">{item.copy}</p>
@@ -551,6 +579,176 @@ function Inspiration({ refs, palette, jewelry }: { refs: string[]; palette: { na
         {jewelry ? "From your palette" : "From your work"}
       </span>
     </div>
+  );
+}
+
+const ARCADE_SHIPPING = "https://arcadestudio.zendesk.com/hc/en-us/sections/33572193621651-Shipping-Tracking";
+const ARCADE_RETURNS = "https://arcadestudio.zendesk.com/hc/en-us/articles/33573465190035-Do-Makers-accept-returns-or-exchanges-of-my-order";
+const DIMENSION = /size|length|width|height|dimension|diameter/i;
+
+/** Arcade care text uses **bold** and "* " bullets. */
+function CareText({ text }: { text: string }) {
+  const bold = (line: string) => line.split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <strong key={i} className="font-semibold text-ink">{part}</strong> : part));
+  const blocks: React.ReactNode[] = [];
+  let list: string[] = [];
+  const flush = () => { if (list.length) blocks.push(<ul key={blocks.length} className="list-disc space-y-1 pl-5">{list.map((li, i) => <li key={i}>{bold(li)}</li>)}</ul>); list = []; };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { flush(); continue; }
+    const item = line.match(/^[*-]\s+(.*)$/);
+    if (item) { list.push(item[1]); continue; }
+    flush();
+    blocks.push(<p key={blocks.length}>{bold(line)}</p>);
+  }
+  flush();
+  return <div className="space-y-3">{blocks}</div>;
+}
+
+function Section({ title, open, children }: { title: string; open?: boolean; children: React.ReactNode }) {
+  return (
+    <details open={open} className="group border-b border-line py-5">
+      <summary className="flex cursor-pointer list-none items-center justify-between font-serif text-[19px] tracking-[-0.02em] [&::-webkit-details-marker]:hidden">
+        {title}
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4 text-subtle transition group-open:rotate-180"><path fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>
+      </summary>
+      <div className="mt-3 font-serif text-[16px] leading-relaxed text-muted">{children}</div>
+    </details>
+  );
+}
+
+/** A finished product, large, with Arcade's specs and checkout. */
+function ProductPage({ item, product: initial, palette, onBack }: { item: PlanItem; product: ProductCard; palette: { name: string; hex: string }[]; onBack: () => void }) {
+  const [product, setProduct] = useState(initial);
+  const [refreshed, setRefreshed] = useState(false);
+  const [active, setActive] = useState(0);
+  const [qty, setQty] = useState(1);
+  const [buying, setBuying] = useState(false);
+  const [err, setErr] = useState("");
+  const images = [...new Set([product.imageUrl, ...product.images, product.patternImageUrl ?? ""].filter(Boolean))];
+  const price = money(product.price);
+  const total = product.price ? money({ ...product.price, amount: product.price.amount * qty }) : null;
+  const specs = product.specs ?? [];
+  const dimensions = specs.filter((spec) => DIMENSION.test(spec.label));
+  const discount = product.discounts?.[0];
+
+  // Arcade image URLs expire. Re-fetch the card once if an image stops loading.
+  async function refresh() {
+    if (refreshed) return;
+    setRefreshed(true);
+    const { products } = await post<{ products: ProductCard[] }>("/api/art", { productIds: [product.productId] }).catch(() => ({ products: [] as ProductCard[] }));
+    if (products[0]) setProduct(products[0]);
+  }
+
+  async function buy() {
+    setBuying(true); setErr("");
+    try { await checkout(product.productId, qty); }
+    catch (e) { setErr(message(e)); }
+    finally { setBuying(false); }
+  }
+
+  return (
+    <main className="min-h-dvh bg-paper text-ink">
+      <div className="mx-auto max-w-6xl px-6 pb-24">
+        <nav className="flex h-20 items-center">
+          <button type="button" onClick={onBack} className="flex items-center gap-2 font-serif text-[17px] tracking-[-0.01em] text-subtle hover:text-ink">
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4"><path fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M19 12H5m6-6-6 6 6 6" /></svg>
+            Back to product line
+          </button>
+        </nav>
+
+        <div className="grid gap-10 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-14">
+          <section aria-label="Product images">
+            <div className="aspect-square overflow-hidden rounded-[18px] border border-[#e6e5e1] bg-white">
+              <img key={images[active]} src={images[active]} alt={item.name} onError={refresh} className="explore-in h-full w-full object-cover" />
+            </div>
+            {images.length > 1 && (
+              <ul className="mt-4 grid grid-cols-5 gap-3">
+                {images.map((src, i) => (
+                  <li key={src}>
+                    <button
+                      type="button"
+                      onClick={() => setActive(i)}
+                      aria-label={`Image ${i + 1}${src === product.patternImageUrl ? ", the print" : ""}`}
+                      aria-pressed={i === active}
+                      className={`block aspect-square w-full overflow-hidden rounded-[12px] border-2 bg-white transition ${i === active ? "border-ink" : "border-transparent opacity-80 hover:opacity-100"}`}
+                    >
+                      <img src={src} alt="" className="h-full w-full object-cover" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <p className="font-serif text-sm uppercase tracking-[0.08em] text-muted">{item.categoryName}</p>
+            <h1 className="mt-2 font-serif text-[clamp(2.25rem,4vw,3.5rem)] font-normal leading-[1.02] tracking-[-0.04em]">{item.name}</h1>
+            <p className="mt-2 text-sm text-muted">{product.title}</p>
+            <div className="mt-6 flex items-center justify-between gap-4">
+              {price ? <p className="font-serif text-[40px] leading-none tracking-[-0.03em]">{price}</p> : <span />}
+              <a href="https://www.arcade.ai" target="_blank" rel="noopener noreferrer" className="flex h-11 items-center gap-2 rounded-full border border-field bg-white px-5 font-serif text-[16px] tracking-[-0.01em] hover:border-[#a7b8b0] hover:bg-[#f5f7f4]">
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4"><path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Zm9.5-13.5 4 4" /></svg>
+                Edit in Arcade
+              </a>
+            </div>
+
+            <dl className="mt-6 space-y-3 border-y border-line py-5 font-serif text-[17px]">
+              {specs.map((spec) => (
+                <div key={spec.label} className="flex items-baseline justify-between gap-6">
+                  <dt className="tracking-[-0.01em]">{spec.label}</dt>
+                  <dd className="text-right text-muted">{spec.value}</dd>
+                </div>
+              ))}
+              <div className="flex items-center justify-between gap-6">
+                <dt className="tracking-[-0.01em]">Color</dt>
+                <dd className="flex items-center gap-2 text-right text-muted">
+                  <span className="flex shrink-0 -space-x-1" aria-hidden="true">
+                    {palette.slice(0, 4).map((c) => <span key={c.hex + c.name} className="h-4 w-4 rounded-full ring-2 ring-paper" style={{ background: c.hex }} />)}
+                  </span>
+                  {palette.slice(0, 3).map((c) => c.name).join(", ")}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="flex items-center justify-between py-5">
+              <span className="font-serif text-[17px] tracking-[-0.01em]">Quantity</span>
+              <div className="flex items-center gap-4">
+                <button type="button" onClick={() => setQty((n) => Math.max(1, n - 1))} disabled={qty <= 1} aria-label="One fewer" className="grid h-11 w-11 place-items-center rounded-full bg-[#f1f0ec] text-lg hover:bg-[#e8e6e0] disabled:opacity-40">−</button>
+                <span className="w-6 text-center font-serif text-lg tabular-nums" aria-live="polite">{qty}</span>
+                <button type="button" onClick={() => setQty((n) => Math.min(20, n + 1))} aria-label="One more" className="grid h-11 w-11 place-items-center rounded-full bg-[#f1f0ec] text-lg hover:bg-[#e8e6e0]">+</button>
+              </div>
+            </div>
+
+            <button type="button" onClick={buy} disabled={buying} className="h-14 w-full rounded-full bg-pill font-serif text-[18px] tracking-[-0.01em] text-white hover:bg-pill-hover disabled:opacity-60">
+              {buying ? "Opening checkout" : qty > 1 && total ? `Buy Now · ${total}` : "Buy Now"}
+            </button>
+            {discount && <p className="mt-3 text-center text-[13px] text-muted">{product.maker ?? "This maker"} takes {discount.percent}% off orders over {money({ amount: discount.minSpend, currency: product.price?.currency ?? "USD" })}.</p>}
+            {err && <p className="mt-3 text-center text-[13px] text-ink" role="alert">{err}</p>}
+
+            <div className="mt-6 border-t border-line">
+              <Section title="Product Details" open>
+                <p>{item.copy}</p>
+                {product.intro && <p className="mt-3">{product.intro}</p>}
+                {product.maker && <p className="mt-3">Made to order by {product.maker}.</p>}
+              </Section>
+              {dimensions.length > 0 && (
+                <Section title="Dimensions">
+                  <ul className="space-y-1">{dimensions.map((d) => <li key={d.label}>{d.label}: {d.value}</li>)}</ul>
+                </Section>
+              )}
+              {product.care && <Section title="Care Instructions"><CareText text={product.care} /></Section>}
+              <Section title="Shipping & Returns">
+                <p>Made to order{product.maker ? ` by ${product.maker}` : ""} and shipped from the maker through Arcade.</p>
+                <p className="mt-3">
+                  See Arcade&apos;s <a href={ARCADE_SHIPPING} target="_blank" rel="noopener noreferrer" className="text-ink underline decoration-line underline-offset-4">shipping policies</a> and{" "}
+                  <a href={ARCADE_RETURNS} target="_blank" rel="noopener noreferrer" className="text-ink underline decoration-line underline-offset-4">return policy</a>.
+                </p>
+              </Section>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
   );
 }
 

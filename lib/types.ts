@@ -38,4 +38,13 @@ export interface ProductCard {
   images: string[];
   price: { amount: number; currency: string } | null;
   maker: string | null;
+  /** The flat print or design image, shown as an extra thumbnail. */
+  patternImageUrl?: string | null;
+  /** Arcade's description without its spec lines. */
+  intro?: string;
+  /** Arcade's "- Label: Value" lines, e.g. Fabric: Crisp Linen. */
+  specs?: { label: string; value: string }[];
+  care?: string;
+  /** Maker volume discounts that actually discount something. */
+  discounts?: { minSpend: number; percent: number }[];
 }

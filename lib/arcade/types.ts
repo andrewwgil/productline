@@ -28,6 +28,11 @@ export interface Product {
   maker: { makerId: string; name: string } | null;
   selectionLabel?: string;
   unitPrice: { amount: string; currency: string | null } | null;
+  /** Arcade's handmade note, then "- Label: Value" spec lines. Null when it cannot be loaded. */
+  description?: string | null;
+  /** Markdown-ish care text. Empty when there is none. */
+  careInstructions?: string;
+  volumeDiscounts?: { currency: string; tiers: { minimumSpend: string; maximumSpend: string | null; discountPercent: number | null }[] } | null;
 }
 export interface Checkout { checkoutId: string; checkoutUrl: string }
 export interface Order { orderId: string; status: string; [k: string]: unknown }

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "skills": {
+    "arcade-api": {
+      "source": "docs.arcade.ai",
+      "sourceUrl": "https://docs.arcade.ai",
+      "sourceType": "well-known",
+      "computedHash": "3db02da53049d4681d5e63683c513873bc14906b4d371721086b84447c77829e",
+      "wellKnownDigest": "sha256:ebc562a0166bfc8ad81fc2a56d0415b0261d0e2a0cd4997c6b5a82369427cc74"
+    },
+    "arcade-api-test-drive": {
+      "source": "docs.arcade.ai",
+      "sourceUrl": "https://docs.arcade.ai",
+      "sourceType": "well-known",
+      "computedHash": "87ec7c64078b6c9f3afa91f9bd35052a1d170d7410e577ac810670472025985c",
+      "wellKnownDigest": "sha256:538a90edb0d8544211ddb8fc89758522d6d07a7dfc693f8a47a5e1174e4afd9a"
+    }
+  }
+}

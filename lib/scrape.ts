@@ -43,6 +43,7 @@ async function scrapeStatic(url: URL): Promise<Portfolio> {
 
 async function withRendered(url: URL, current: Portfolio): Promise<Portfolio> {
   if (!isThin(current)) return current;
+  if (process.env.VERCEL) return current; // no Chromium on Vercel functions
   try {
     const { scrapeRendered } = await import("./scrape-browser");
     const rendered = await scrapeRendered(url);
