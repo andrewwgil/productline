@@ -5,7 +5,7 @@ import { MAX_PORTFOLIO_IMAGES, MAX_REFERENCE_IMAGES } from "@/lib/limits";
 import type { Collection, CollectionItem, Portfolio, TasteProfile } from "@/lib/types";
 
 type Step = "idle" | "scrape" | "taste" | "generate" | "done" | "error";
-const STEPS: [Step, string][] = [["scrape", "Reading portfolio"], ["taste", "Distilling taste"], ["generate", "Designing & building products"]];
+const STEPS: [Step, string][] = [["scrape", "Reading your vision"], ["taste", "Distilling your taste"], ["generate", "Building the business"]];
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif)$/i;
 type FolderAttrs = React.InputHTMLAttributes<HTMLInputElement> & { webkitdirectory?: string; directory?: string };
 
@@ -20,7 +20,7 @@ function isImageFile(file: File) {
   return file.type.startsWith("image/") || IMAGE_FILE.test(file.name);
 }
 
-const STUDIO_PHASES = ["Sketching the repeats", "Scarves, pillows, and table linens", "A piece of jewelry", "Opening the store"];
+const STUDIO_PHASES = ["Vision into repeats", "Scarves, pillows, linens", "Jewelry from that taste", "Opening the business"];
 
 function voiceLines(taste: TasteProfile | null): string[] {
   if (!taste) return ["The work is still deciding what it wants to become."];
@@ -51,7 +51,7 @@ function Making({ taste }: { taste: TasteProfile | null }) {
           </li>
         ))}
       </ol>
-      <p className="mt-5 text-xs text-neutral-500">Arcade is drawing the line. This usually takes a minute or two.</p>
+      <p className="mt-5 text-xs text-neutral-500">Building the business from this taste. Usually a minute or two.</p>
     </div>
   );
 }
@@ -139,15 +139,15 @@ export default function Home() {
     <main className="min-h-screen bg-[#0e0e10] text-white">
       <div className="mx-auto max-w-3xl px-6 py-24">
         <p className="text-xs uppercase tracking-[0.4em] text-orange-400">productline</p>
-        <h1 className="mt-4 font-serif text-5xl leading-tight md:text-6xl">Bring your taste.<br />Leave with a brand.</h1>
-        <p className="mt-6 max-w-xl text-lg text-neutral-400">Paste a portfolio URL, or upload a folder or zip of images. We read the palette, motifs and voice, then design a made-to-order product line with Arcade and open the store.</p>
+        <h1 className="mt-4 font-serif text-5xl leading-tight md:text-6xl">Build a business<br />around your taste.</h1>
+        <p className="mt-6 max-w-xl text-lg text-neutral-400">Drop in your work. Productline turns your vision into your own branded product line in one click.</p>
         <form onSubmit={(e) => { e.preventDefault(); runUrl(); }} className="mt-10 flex gap-3">
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="yourportfolio.com" aria-label="Portfolio URL" className="flex-1 rounded-full bg-white/10 px-6 py-4 outline-none ring-1 ring-white/20 focus:ring-orange-400" />
           <button disabled={working} className="rounded-full bg-orange-500 px-8 py-4 font-medium text-black hover:bg-orange-400 disabled:opacity-50">Build my line</button>
         </form>
         <div className="mt-8 rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
-          <p className="text-xs uppercase tracking-[0.3em] text-neutral-500">Or upload the work</p>
-          <p className="mt-2 text-sm text-neutral-400">A folder of images, or a .zip. Add a note or bio if the pictures need a voice.</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-neutral-500">Or drop in the files</p>
+          <p className="mt-2 text-sm text-neutral-400">A folder or a .zip. A note if the vision needs words.</p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <label className="cursor-pointer rounded-full bg-white/10 px-5 py-3 text-sm ring-1 ring-white/15 hover:bg-white/15">
               Choose folder
@@ -281,7 +281,7 @@ function Storefront({ taste, col, portfolio, onReset }: { taste: TasteProfile; c
         ))}
       </section>
       <footer id="about" className="border-t px-6 py-10 text-center text-sm opacity-70" style={{ borderColor: ink }}>
-        {taste.brandName}: {taste.voice.adjectives.join(" · ")}. Designed from {portfolio?.url ?? "the artist's portfolio"}, made with Arcade.
+        Built from {taste.brandName}&apos;s taste.
       </footer>
     </main>
   );

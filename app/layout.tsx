@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "productline",
-  description: "Turn a portfolio into a branded product line",
+  description: "Drop in your work. Productline turns your vision into your own branded product line.",
 };
 
 export default function RootLayout({
