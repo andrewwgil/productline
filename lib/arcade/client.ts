@@ -41,6 +41,25 @@ export async function createPattern(input: CreatePatternInput): Promise<Job> {
 }
 export const getPattern = (patternId: string) => call<Pattern>("patterns/get", { patternId });
 
+type UploadTicket = { uploadId: string; uploadUrl: string; requiredHeaders?: Record<string, string> };
+
+/** PUT image bytes, then references/create. Tries the documented upload-url path, then createUpload. */
+export async function uploadReferenceImage(bytes: Buffer, mediaType: string): Promise<string> {
+  const body = { requestId: rid("upl"), mediaType, byteLength: bytes.length };
+  let ticket: UploadTicket;
+  try {
+    ticket = await call<UploadTicket>("references/upload-url", body);
+  } catch (err) {
+    if (!(err instanceof ArcadeError) || (err.status !== 404 && err.status !== 405)) throw err;
+    ticket = await call<UploadTicket>("references/createUpload", body);
+  }
+  const headers = { "Content-Type": mediaType, ...(ticket.requiredHeaders ?? {}) };
+  const put = await fetch(ticket.uploadUrl, { method: "PUT", headers, body: new Uint8Array(bytes) });
+  if (!put.ok) throw new Error(`Reference upload failed (${put.status})`);
+  const created = await call<{ referenceId: string }>("references/create", { requestId: rid("ref"), uploadId: ticket.uploadId });
+  return created.referenceId;
+}
+
 // Refine endpoint paths follow docs.arcade.ai/api-reference/refine/*; verify with the live key.
 const REFINE_PATH: Record<RefineOp["op"], string> = { edit: "refine/edit", recolor: "refine/recolor", crop: "refine/crop", seamless: "refine/seamless", extend: "refine/extend", fix: "refine/fix" };
 export async function refine(op: RefineOp): Promise<Job> {

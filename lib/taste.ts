@@ -1,3 +1,4 @@
+import { MAX_PORTFOLIO_IMAGES } from "./limits";
 import type { Portfolio, TasteProfile } from "./types";
 
 export const isClaudeMock = () => !process.env.ANTHROPIC_API_KEY;
@@ -6,9 +7,16 @@ const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5";
 const SYSTEM = `You are a creative director turning an artist's portfolio into a product line brand.
 Return ONLY JSON matching: {"brandName":string,"tagline":string,"palette":[{"name":string,"hex":"#rrggbb"}] (5 colors, last = background),"motifs":string[] (4-6),"voice":{"adjectives":string[3],"sample":string (2 sentences in the artist's voice)},"patternPrompts":string[3] (Arcade print-pattern prompts, <300 chars, rich in motif/palette/technique),"jewelryPrompt":string,"preferredCategories":string[] (product types that fit, e.g. scarf, pillow, napkins, lampshade, rug)}`;
 
+function visionBlock(src: string): unknown | null {
+  const data = src.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
+  if (data) return { type: "image", source: { type: "base64", media_type: data[1], data: data[2] } };
+  if (/^https?:\/\//i.test(src)) return { type: "image", source: { type: "url", url: src } };
+  return null;
+}
+
 export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
   if (isClaudeMock()) return mockTaste(p);
-  const content: unknown[] = p.images.slice(0, 6).map((u) => ({ type: "image", source: { type: "url", url: u } }));
+  const content: unknown[] = p.images.slice(0, MAX_PORTFOLIO_IMAGES).map(visionBlock).filter(Boolean);
   content.push({ type: "text", text: `Portfolio: ${p.url}\nTitle: ${p.title}\nDescription: ${p.description}\nText: ${p.text.slice(0, 4000)}` });
   const call = async (withImages: boolean) => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -25,10 +33,17 @@ export async function extractTaste(p: Portfolio): Promise<TasteProfile> {
 }
 
 export function mockTaste(p: Portfolio): TasteProfile {
-  const host = new URL(p.url).hostname.replace(/^www\./, "");
+  let host = "portfolio";
+  try { host = new URL(p.url).hostname.replace(/^www\./, ""); } catch { /* upload urls are still absolute */ }
   const isGil = host.includes("giveideaslife");
+  const uploadedTitle = p.title.trim();
+  const brandName = isGil
+    ? "Give Ideas Life"
+    : host === "upload.local"
+      ? (uploadedTitle && uploadedTitle !== "Uploaded portfolio" ? uploadedTitle.slice(0, 48) : "Studio Upload")
+      : host.split(".")[0].replace(/^\w/, (c) => c.toUpperCase());
   return {
-    brandName: isGil ? "Give Ideas Life" : host.split(".")[0].replace(/^\w/, (c) => c.toUpperCase()),
+    brandName,
     tagline: isGil ? "Sketchbook energy, made to live with." : "Your portfolio, made physical.",
     palette: [
       { name: "Ink", hex: "#1b1b1f" }, { name: "Signal Orange", hex: "#ff5a1f" },

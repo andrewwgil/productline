@@ -10,9 +10,12 @@
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "jszip": "^3.10.2",
     "next": "15.5.27",
+    "playwright": "^1.64.0",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

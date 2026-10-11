@@ -27,8 +27,9 @@ export async function generateCollection(t: TasteProfile, opts: { referenceIds?:
   const jewelry = cats.find((c) => c.world === "jewelry");
 
   // 1) patterns, in parallel
+  const refs = opts.referenceIds?.filter(Boolean).slice(0, 3);
   const patterns = await Promise.all(t.patternPrompts.map((prompt) =>
-    createPattern({ prompt, colors, referenceIds: opts.referenceIds?.slice(0, 3) }).then((j) => String(j.result?.patternId))));
+    createPattern({ prompt, colors, ...(refs?.length ? { referenceIds: refs } : {}) }).then((j) => String(j.result?.patternId))));
   const patternImgs = await Promise.all(patterns.map(async (id) => patternImage(await getPattern(id) as Record<string, unknown>)));
 
   // 2) print products across categories (rotate patterns)
