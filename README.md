@@ -2,8 +2,6 @@
 
 Paste an artist's portfolio URL to get a branded, made-to-order product line built with the [Arcade API](https://docs.arcade.ai). Built for Shopping 3.0, the AI Commerce Hackathon with Arcade (SF Tech Week, Oct 11 2026).
 
-The default path needs only `ARCADE_API_KEY`. Anthropic and Fal stay available, and run only when their keys are set.
-
 **Pipeline:** scrape a URL (`/api/scrape`) or upload a folder / `.zip` plus an optional note (`/api/upload`) → the same portfolio shape → a taste profile (`/api/taste`) → pick a style → Arcade patterns and products (`/api/collection`) → branded storefront → Arcade checkout (`/api/checkout`, `/api/order`).
 
 Taste, by default, is read on the server. Palette colors come from the portfolio images (median-cut on pixels downscaled with sharp, near-white backgrounds dropped). Motifs and voice come from titles, alt text, and the optional note. If `ANTHROPIC_API_KEY` is set, Claude can write that profile instead.
