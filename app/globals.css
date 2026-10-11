@@ -10,6 +10,7 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-newsreader), Georgia, "Iowan Old Style", serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,4 +33,83 @@ body {
 
 .voice-line {
   animation: voice-rise 0.55s ease;
+}
+
+@keyframes hero-float {
+  0%, 100% { transform: translateY(0) rotate(var(--rot, 0deg)); }
+  50% { transform: translateY(-12px) rotate(var(--rot, 0deg)); }
+}
+
+.hero-item {
+  position: absolute;
+  display: block;
+  animation: hero-float 8.5s ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+  transform: rotate(var(--rot, 0deg));
+}
+
+.hero-item img {
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 18px 28px rgba(40, 32, 24, 0.16));
+}
+
+.hero-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  max-width: 14rem;
+  translate: -50% 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  background: #1c1c1c;
+  color: #fafaf8;
+  padding: 0.3rem 0.65rem;
+  font-family: var(--font-geist-sans), sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hero-item:hover,
+.hero-item:focus-visible {
+  animation: none;
+  z-index: 30;
+  transform: translateY(-16px) rotate(var(--rot, 0deg)) scale(1.045);
+  outline: none;
+}
+
+.hero-item:hover .hero-tip,
+.hero-item:focus-visible .hero-tip {
+  opacity: 1;
+}
+
+.hero-item:focus-visible img {
+  outline: 2px solid #1c1c1c;
+  outline-offset: 6px;
+  border-radius: 12px;
+}
+
+@media (max-width: 767px) {
+  .hero-item:not([data-mobile="true"]) { display: none; }
+  .hero-item[data-mobile="true"] {
+    top: auto;
+    width: 28vw;
+    max-width: 128px;
+  }
+  .hero-item[data-mobile="true"] img {
+    max-height: 20vh;
+    width: auto;
+    margin-inline: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-item { animation: none; }
+  .hero-item:hover,
+  .hero-item:focus-visible { transform: translateY(-8px) rotate(var(--rot, 0deg)); }
 }

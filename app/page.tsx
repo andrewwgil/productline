@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useState } from "react";
+import heroProducts from "@/public/hero/products.json";
 import { MAX_PORTFOLIO_IMAGES, MAX_REFERENCE_IMAGES } from "@/lib/limits";
 import type { Collection, CollectionItem, Portfolio, TasteProfile } from "@/lib/types";
 
@@ -65,7 +66,7 @@ function pickImages(list: FileList | File[]) {
 }
 
 export default function Home() {
-  const [url, setUrl] = useState("giveideaslife.com");
+  const [url, setUrl] = useState("");
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [fileLabel, setFileLabel] = useState("");
@@ -130,6 +131,7 @@ export default function Home() {
   }
 
   async function runUrl() {
+    if (!url.trim()) return;
     setErr(""); setCol(null); setTaste(null); setPortfolio(null);
     try {
       setStep("scrape");
@@ -171,71 +173,120 @@ export default function Home() {
   );
   if (step === "done" && taste && col) return <Storefront taste={taste} col={col} portfolio={portfolio} onReset={() => setStep("idle")} />;
 
+  const status = STEPS.find(([name]) => name === step)?.[1];
+
   return (
-    <main className="min-h-screen bg-[#0e0e10] text-white">
-      <div className="mx-auto max-w-3xl px-6 py-24">
-        <p className="text-xs uppercase tracking-[0.4em] text-orange-400">productline</p>
-        <h1 className="mt-4 font-serif text-5xl leading-tight md:text-6xl">Build a business<br />around your taste.</h1>
-        <p className="mt-6 max-w-xl text-lg text-neutral-400">Drop in your work. Productline turns your vision into your own branded product line in one click.</p>
-        <form onSubmit={(e) => { e.preventDefault(); runUrl(); }} className="mt-10 flex gap-3">
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="yourportfolio.com" aria-label="Portfolio URL" className="flex-1 rounded-full bg-white/10 px-6 py-4 outline-none ring-1 ring-white/20 focus:ring-orange-400" />
-          <button disabled={working} className="rounded-full bg-orange-500 px-8 py-4 font-medium text-black hover:bg-orange-400 disabled:opacity-50">Build my line</button>
-        </form>
-        <div className="mt-8 rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
-          <p className="text-xs uppercase tracking-[0.3em] text-neutral-500">Or drop in the files</p>
-          <p className="mt-2 text-sm text-neutral-400">A folder or a .zip. A note if the vision needs words.</p>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="cursor-pointer rounded-full bg-white/10 px-5 py-3 text-sm ring-1 ring-white/15 hover:bg-white/15">
-              Choose folder
-              <input
-                type="file"
-                multiple
-                accept="image/*"
-                disabled={working}
-                className="sr-only"
-                aria-label="Upload a folder of images"
-                onChange={(e) => { const picked = e.target.files; if (picked?.length) takeFolder(picked); e.target.value = ""; }}
-                {...({ webkitdirectory: "", directory: "" } as FolderAttrs)}
-              />
-            </label>
-            <label className="cursor-pointer rounded-full bg-white/10 px-5 py-3 text-sm ring-1 ring-white/15 hover:bg-white/15">
-              Choose .zip
-              <input type="file" accept=".zip,application/zip" disabled={working} className="sr-only" aria-label="Upload a zip of images" onChange={(e) => { const picked = e.target.files; if (picked?.length) takeZip(picked); e.target.value = ""; }} />
-            </label>
-            {fileLabel && <span className="text-sm text-neutral-400">{fileLabel}</span>}
-          </div>
-          <label className="mt-4 block text-xs uppercase tracking-[0.2em] text-neutral-500">
-            Note or bio
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Materials, motifs, the story behind the work" className="mt-2 w-full resize-none rounded-2xl bg-black/30 px-4 py-3 text-sm normal-case tracking-normal text-white outline-none ring-1 ring-white/15 placeholder:text-neutral-600 focus:ring-orange-400" />
+    <main className="relative min-h-dvh overflow-hidden bg-[#fafaf8] text-[#161616]">
+      <HeroProducts />
+      <div className="relative z-20 mx-auto flex min-h-dvh flex-col items-center px-6 pb-16 pt-12 md:pt-16">
+        <p className="font-serif text-[1.45rem] font-medium tracking-[-0.03em] text-[#1a1a1a]">Product Line</p>
+        <h1 className="mt-[12vh] max-w-5xl text-center font-serif text-[clamp(2.75rem,6.4vw,6rem)] font-normal leading-[1.02] tracking-[-0.035em] text-[#141414]">
+          Use your portfolio.<br />Find your product line.
+        </h1>
+        <form onSubmit={(e) => { e.preventDefault(); runUrl(); }} className="mt-10 w-full max-w-lg">
+          <label className="relative block">
+            <span className="sr-only">Portfolio URL</span>
+            <LinkIcon />
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="Paste a URL to your portfolio"
+              aria-label="Portfolio URL"
+              inputMode="url"
+              disabled={working}
+              className="h-14 w-full rounded-full border border-[#e4e4de] bg-white pl-12 pr-5 text-[15px] text-[#1a1a1a] shadow-[0_1px_2px_rgba(20,20,20,0.04)] outline-none placeholder:text-[#9b9b94] focus:border-[#cfcfc8] focus:ring-2 focus:ring-[#1c1c1c]/10 disabled:opacity-60"
+            />
           </label>
-          {shown.length > 0 && (
-            <ul className="mt-4 flex gap-2 overflow-x-auto pb-1">
-              {shown.map((src, i) => (
-                <li key={`${i}-${src.slice(0, 32)}`} className="shrink-0">
-                  <img src={src} alt="" className="h-16 w-16 rounded-xl object-cover ring-1 ring-white/20" />
-                </li>
-              ))}
-            </ul>
-          )}
-          <button type="button" onClick={runUpload} disabled={working || files.length === 0} className="mt-4 rounded-full bg-white px-6 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-40">Build from upload</button>
-        </div>
-        {step !== "idle" && (
-          <ol className="mt-12 space-y-3">
-            {STEPS.map(([s, label], i) => {
-              const cur = STEPS.findIndex(([x]) => x === step);
-              const state = step === "error" && i === Math.max(cur, 0) ? "err" : i < cur ? "done" : i === cur ? "now" : "todo";
-              return <li key={s} className={`flex items-center gap-3 ${state === "todo" ? "text-neutral-600" : ""}`}>
-                <span className={`h-2.5 w-2.5 rounded-full ${state === "done" ? "bg-green-400" : state === "now" ? "animate-pulse bg-orange-400" : state === "err" ? "bg-red-400" : "bg-neutral-700"}`} />{label}
-              </li>;
-            })}
-          </ol>
+        </form>
+        <p className="mt-4 text-center text-sm text-[#8d8d86]">
+          or{" "}
+          <label className="cursor-pointer underline decoration-[#d5d5ce] underline-offset-4 hover:text-[#1a1a1a]">
+            upload a folder
+            <input
+              type="file"
+              multiple
+              accept="image/*"
+              disabled={working}
+              className="sr-only"
+              aria-label="Upload a folder of images"
+              onChange={(e) => { const picked = e.target.files; if (picked?.length) takeFolder(picked); e.target.value = ""; }}
+              {...({ webkitdirectory: "", directory: "" } as FolderAttrs)}
+            />
+          </label>
+          {" "}or{" "}
+          <label className="cursor-pointer underline decoration-[#d5d5ce] underline-offset-4 hover:text-[#1a1a1a]">
+            a .zip
+            <input type="file" accept=".zip,application/zip" disabled={working} className="sr-only" aria-label="Upload a zip of images" onChange={(e) => { const picked = e.target.files; if (picked?.length) takeZip(picked); e.target.value = ""; }} />
+          </label>
+        </p>
+        {files.length > 0 && (
+          <div className="mt-4 flex w-full max-w-lg flex-col items-center gap-3">
+            <p className="text-sm text-[#6f6f68]">{fileLabel}</p>
+            {shown.length > 0 && (
+              <ul className="flex gap-2 overflow-x-auto">
+                {shown.map((src, i) => (
+                  <li key={`${i}-${src.slice(0, 24)}`} className="shrink-0">
+                    <img src={src} alt="" className="h-12 w-12 rounded-lg object-cover" />
+                  </li>
+                ))}
+              </ul>
+            )}
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional note" aria-label="Note or bio" className="h-10 w-full max-w-xs rounded-full border border-[#e4e4de] bg-white px-4 text-sm outline-none placeholder:text-[#9b9b94] focus:ring-2 focus:ring-[#1c1c1c]/10" />
+            <button type="button" onClick={runUpload} disabled={working} className="text-sm text-[#1a1a1a] underline decoration-[#d5d5ce] underline-offset-4">Build from these files</button>
+          </div>
         )}
-        {step === "generate" && <Making taste={taste} />}
-        {portfolio && step !== "idle" && <p className="mt-6 text-sm text-neutral-500">Found {portfolio.images.length} images on {portfolio.title}</p>}
-        {taste && <div className="mt-4 flex gap-2">{taste.palette.map((c) => <span key={c.hex} title={c.name} className="h-8 w-8 rounded-full ring-1 ring-white/20" style={{ background: c.hex }} />)}</div>}
-        {err && <p className="mt-6 rounded-lg bg-red-950 p-4 text-sm text-red-300">{err}</p>}
+        {status && <p className="mt-6 text-sm text-[#6f6f68]" aria-live="polite">{status}</p>}
+        {err && <p className="mt-4 max-w-lg text-center text-sm text-red-700">{err}</p>}
       </div>
     </main>
+  );
+}
+
+const HERO_SLOTS: { className: string; rot: string; delay: string; mobile?: boolean }[] = [
+  { className: "left-[-7%] top-[16%] w-[min(28vw,300px)]", rot: "-7deg", delay: "0s" },
+  { className: "left-[-2%] bottom-[-8%] w-[min(20vw,210px)]", rot: "5deg", delay: "-1.4s", mobile: true },
+  { className: "left-[15%] bottom-[7%] w-[min(14vw,160px)]", rot: "-12deg", delay: "-2.2s", mobile: true },
+  { className: "left-[34%] bottom-[-5%] w-[min(18vw,210px)]", rot: "3deg", delay: "-0.7s", mobile: true },
+  { className: "left-[51%] bottom-[3%] w-[min(15vw,180px)]", rot: "-5deg", delay: "-2.8s" },
+  { className: "right-[18%] bottom-[12%] w-[min(13vw,150px)]", rot: "9deg", delay: "-1.8s", mobile: true },
+  { className: "right-[-8%] top-[20%] w-[min(24vw,270px)]", rot: "8deg", delay: "-0.3s" },
+  { className: "right-[-1%] bottom-[-9%] w-[min(17vw,190px)]", rot: "-6deg", delay: "-3.1s", mobile: true },
+  { className: "left-[7%] top-[24%] w-[min(12vw,140px)]", rot: "11deg", delay: "-1.1s" },
+  { className: "right-[14%] top-[11%] w-[min(13vw,150px)]", rot: "-9deg", delay: "-2.5s" },
+];
+
+function HeroProducts() {
+  return (
+    <ul className="pointer-events-none absolute inset-0" aria-label="Arcade products">
+      {heroProducts.map((product, index) => {
+        const slot = HERO_SLOTS[index % HERO_SLOTS.length];
+        return (
+          <li key={product.href} className="contents">
+            <a
+              href={product.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-mobile={slot.mobile ? "true" : undefined}
+              aria-label={`${product.title}. Opens on Arcade.`}
+              className={`hero-item pointer-events-auto ${slot.className}`}
+              style={{ ["--rot" as string]: slot.rot, ["--delay" as string]: slot.delay }}
+            >
+              <img src={product.imageUrl} alt={product.title} />
+              <span className="hero-tip">{product.title}</span>
+            </a>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9b9b94]">
+      <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" d="M10 13a5 5 0 0 0 7.07 0l1.42-1.41a5 5 0 0 0-7.08-7.08L10.5 5.4" />
+      <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" d="M14 11a5 5 0 0 0-7.07 0L5.5 12.42a5 5 0 0 0 7.08 7.08l.91-.91" />
+    </svg>
   );
 }
 
