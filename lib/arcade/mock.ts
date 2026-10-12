@@ -11,6 +11,7 @@ export const MOCK_CATEGORIES: (Category & { opts: Record<string, string[]>; pric
   { categoryId: "mock-pillow", name: "Decorative Pillows", imageUrl: null, world: "print", opts: { fabric: ["linen", "cotton velvet"], size: ["20x20", "18x18"] }, price: 120 },
   { categoryId: "mock-scarf", name: "Scarves", imageUrl: null, world: "print", opts: { fabric: ["silk twill", "silk chiffon"], size: ["35x35", "26x26"] }, price: 185 },
   { categoryId: "mock-napkins", name: "Napkins", imageUrl: null, world: "print", opts: { fabric: ["cotton", "linen"], size: ["20x20"] }, price: 68 },
+  { categoryId: "mock-placemat", name: "Placemats", imageUrl: null, world: "print", opts: { fabric: ["linen", "cotton"], size: ["14x19"] }, price: 42 },
   { categoryId: "mock-lampshade", name: "Drum Lampshades", imageUrl: null, world: "print", opts: { size: ["12in", "16in"] }, price: 210 },
   { categoryId: "mock-towel", name: "Tea Towels", imageUrl: null, world: "print", opts: { fabric: ["linen"] }, price: 38 },
   { categoryId: "mock-pendant", name: "Pendant Necklace", imageUrl: null, world: "jewelry", category: { categoryId: "mock-necklaces", name: "Necklaces" }, opts: { metal: ["14k gold", "sterling silver"], chain: ["18in", "20in"] }, price: 260 },

@@ -1,9 +1,11 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import heroProducts from "@/public/hero/products.json";
 import { MAX_PORTFOLIO_IMAGES } from "@/lib/limits";
 import type { ItemStatus } from "@/lib/line";
+import { shrinkImage } from "@/lib/shrink-image";
 import type { LinePlan, PlanItem, Portfolio, ProductCard } from "@/lib/types";
 
 type Stage = "start" | "pick" | "reading" | "line";
@@ -112,7 +114,10 @@ export default function Home() {
     setBusy("Preparing your images");
     try {
       const body = new FormData();
-      for (const file of picked) body.append("file", file, file.name);
+      for (const file of picked) {
+        const upload = zip ? file : await shrinkImage(file, file.name).catch(() => file);
+        body.append("file", upload, upload.name);
+      }
       const r = await fetch("/api/upload", { method: "POST", body });
       const p = await r.json();
       if (!r.ok || p.error) throw new Error(p.error ?? r.statusText);
@@ -239,6 +244,7 @@ export default function Home() {
       <HeroProducts />
       <div className="relative z-20 mx-auto flex flex-col items-center px-6 pb-16 pt-10 md:pt-14">
         <p className="font-serif text-[1.65rem] tracking-[-0.03em]">Product Line</p>
+        <Link href="/share" className="mt-3 font-serif text-[17px] italic tracking-[-0.01em] text-subtle underline decoration-line underline-offset-[5px] hover:text-ink">Share to Arcade</Link>
         <h1 className="mt-[9vh] max-w-5xl text-center font-serif text-[clamp(2.75rem,6.4vw,6rem)] font-normal leading-[0.96] tracking-[-0.045em]">
           <span className="sr-only">Use your portfolio, taste, or inspiration. Find your product line.</span>
           <span aria-hidden="true">Use your <span className="whitespace-nowrap"><RotatingWord words={["portfolio", "taste", "inspiration"]} />.</span><br />Find your product line.</span>

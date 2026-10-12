@@ -27,7 +27,14 @@ export async function call<T>(path: string, body: Record<string, unknown> = {}, 
     if (res.ok) return JSON.parse(text) as T;
     let code = "";
     let message = text;
-    try { ({ code = "", message = text } = JSON.parse(text)); } catch { /* not JSON */ }
+    try {
+      const parsed = JSON.parse(text) as { code?: string; message?: string; error?: string };
+      code = parsed.code || parsed.error || "";
+      message = parsed.message || text;
+    } catch { /* not JSON */ }
+    // 412 is a precondition failure. Surface Arcade's message; do not retry.
+    if (res.status === 412) throw new ArcadeError(412, code || "PRECONDITION_FAILED", message || "Arcade rejected a precondition.");
+    // 409 keeps the same requestId so an idempotent replay can return the original result.
     if (RETRYABLE.has(res.status) && attempt < attempts) {
       const retryAfter = Number(res.headers.get("retry-after"));
       await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1500 * attempt);
@@ -74,14 +81,18 @@ export const getProduct = (productId: string) => call<Product>("products/get", {
 
 type UploadTicket = { uploadId: string; uploadUrl: string; requiredHeaders: Record<string, string> };
 
-/** references/createUpload, PUT the bytes, then references/create. */
-export async function uploadReferenceImage(bytes: Buffer, mediaType: string): Promise<string> {
-  const ticket = await call<UploadTicket>("references/createUpload", { requestId: rid("upl"), mediaType, byteLength: bytes.length });
+/** references/createUpload, PUT the bytes, then references/create. Pass request ids to replay a retry safely. */
+export async function uploadReferenceImage(bytes: Buffer, mediaType: string, requestIds?: { upload?: string; create?: string }): Promise<string> {
+  const ticket = await call<UploadTicket>("references/createUpload", { requestId: requestIds?.upload ?? rid("upl"), mediaType, byteLength: bytes.length });
   if (!isArcadeMock()) {
-    const put = await fetch(ticket.uploadUrl, { method: "PUT", headers: { "Content-Type": mediaType, ...ticket.requiredHeaders }, body: new Uint8Array(bytes) });
+    const put = await fetch(ticket.uploadUrl, {
+      method: "PUT",
+      headers: { "User-Agent": ARCADE_USER_AGENT, "Content-Type": mediaType, ...ticket.requiredHeaders },
+      body: new Uint8Array(bytes),
+    });
     if (!put.ok) throw new Error(`Reference upload failed (${put.status})`);
   }
-  const created = await call<{ referenceId: string }>("references/create", { requestId: rid("ref"), uploadId: ticket.uploadId });
+  const created = await call<{ referenceId: string }>("references/create", { requestId: requestIds?.create ?? rid("ref"), uploadId: ticket.uploadId });
   return created.referenceId;
 }
 

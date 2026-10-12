@@ -22,7 +22,7 @@
   --color-chip: #f1f1f0;
   --color-chip-ink: #626773;
   --font-sans: Arial, Helvetica, sans-serif;
-  --font-serif: Georgia, "Times New Roman", serif;
+  --font-serif: var(--font-newsreader), Georgia, "Times New Roman", serif;
 }
 
 body {

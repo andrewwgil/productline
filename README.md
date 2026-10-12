@@ -30,3 +30,68 @@ npm run dev                  # http://localhost:3000
 - `RESEARCH.md`: API notes, categories, demo ideas and the build plan.
 
 The scraper blocks literal private and loopback hosts. It does not resolve DNS, so it is not a full SSRF guard for a public deployment.
+
+## Share to Arcade
+
+See something you love — a fabric, a hoodie, a screenshot — and ask what it would feel like as a real product. The photo is a **style reference** (color, texture, mood). Arcade designs an original and returns a priced product in your Arcade account.
+
+The landing page links here. `/share` is the maker. `/shared` is the gallery.
+
+**Pipeline.** `POST /api/share` takes a multipart image or JSON `{ imageUrl, prompt, categoryId? }`. It shrinks the image with sharp, stores a share, and returns a `shareId` immediately (`202`). Generation takes one to two minutes, so the work is a state machine (`uploading` → `designing` → `building` → `ready`, or `failed`) advanced by `GET /api/share/[id]`. The browser polls. The server also keeps polling for about half a minute after the POST, then the next GET resumes the same share.
+
+1. `references/createUpload`, PUT the bytes, `references/create`.
+2. `patterns/create` with that `referenceIds` and a prompt that tells Arcade to borrow the mood, not copy the picture. No `categoryId` on this call.
+3. Poll `jobs/get`.
+4. Pick a print category: the one you sent, or a keyword match against live `categories/list`, or Decorative Pillows.
+5. `categories/get` with `selections: {}`, then `products/create` with the complete selections it returned (and a center crop when the pattern’s aspect ratio doesn’t match the size).
+6. Poll the product job, then `products/get` for the image and price.
+
+`products/get` does not include a product page URL. **Open in Arcade** goes to [Arcade Studio](https://studio.arcade.ai), where the account’s products live. If a response ever includes an `https://arcade.ai` product URL, that is used instead.
+
+`GET /api/categories` proxies `categories/list` so the extension and the page can show a picker. The Arcade key stays on the server. Sends `User-Agent: productline/1.0`. A `409` retries the same `requestId` (and, for a consumed `references/createUpload`, uploads once more under a new id). A `412` stops and shows Arcade’s message. A `429` waits for `Retry-After`. Chrome extension origins (`chrome-extension://`) are allowed by CORS. If `SHARE_TOKEN` is set, those routes require `X-Share-Token`.
+
+Shares are stored in Vercel KV / Upstash when `KV_REST_API_URL` + `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`) are set, otherwise as JSON in Vercel Blob when `BLOB_READ_WRITE_TOKEN` is set, otherwise in memory. The in-memory store is called out in the UI: it disappears when the process restarts. Without `ARCADE_API_KEY`, `lib/arcade/mock.ts` runs the same steps and returns a priced mock product.
+
+### Chrome extension
+
+Unpacked install:
+
+1. Open `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. **Load unpacked** and choose the `extension` folder in this repo.
+4. The default server is `https://productline.vercel.app`. Open the popup, then **Backend**, to point it at a local `http://localhost:3000` or to set `X-Share-Token`. There is no Arcade key in the extension.
+
+Right-click any image and choose **Make it with Arcade**. In the popup: **Capture tab**, **Drag a region**, paste, or drop a photo. Chips fill a pillow, scarf, napkins, or placemat prompt. Progress sits on screen for the minute or two Arcade needs, then the card shows the product, the price, and **Open in Arcade**.
+
+### Install the PWA
+
+`/share` registers `public/sw.js` and ships `public/manifest.json` with a `share_target` (POST multipart, `image/*`, action `/api/share-target`).
+
+- **Android (Chrome).** Open `/share`, tap **Install** when the banner appears (or the browser menu → Install app). Then share a photo from another app and choose Share to Arcade.
+- **iOS (Safari).** Open `/share`, tap Share, then **Add to Home Screen**. iOS does not deliver web share targets to installed PWAs the way Android does, so the home-screen app is for opening `/share` and picking a photo. A native share extension is sketched below and is not part of this repo.
+
+The service worker intercepts the share POST and hands the file to `/share`. If the worker is not active yet, `/api/share-target` stores the image and redirects to `/share?pending=…`.
+
+### Native iOS share extension (not built)
+
+A shipping iOS app would add a Share Extension target (`NSExtensionActivationRule` with `NSExtensionActivationSupportsImageWithMaxCount` of 1). The extension writes the image into an app group, and the main app — or the extension itself — POSTs it to `/api/share` with the prompt the person typed in the extension UI. Opening the installed PWA via a universal link (`https://productline.vercel.app/share`) is the lighter version of the same handoff. That target is out of scope here.
+
+### 30-second demo
+
+Full script: [DEMO-SHARE.md](DEMO-SHARE.md).
+
+1. On a phone, install the PWA (or open `/share`).
+2. Find a fabric photo. Share it, or pick it from the page.
+3. Leave the prompt as “What would this look like as a pillow?” and tap **Make it**.
+4. Wait through Reference, Design, and Product. A priced pillow appears, with **Open in Arcade**.
+
+### Env
+
+```
+ARCADE_API_KEY=        # unset = mock Arcade, which still walks the whole share flow
+SHARE_TOKEN=           # optional; clients send it as X-Share-Token
+KV_REST_API_URL=       # or UPSTASH_REDIS_REST_URL
+KV_REST_API_TOKEN=     # or UPSTASH_REDIS_REST_TOKEN
+BLOB_READ_WRITE_TOKEN= # used only when KV is unset
+MOCK_JOB_DELAY_MS=600
+```
