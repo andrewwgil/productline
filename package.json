@@ -9,6 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.1",
+    "@react-three/postprocessing": "^3.2.0",
     "@vercel/blob": "^1.1.1",
     "cheerio": "^1.2.0",
     "jszip": "^3.10.2",
@@ -16,7 +19,8 @@
     "playwright": "^1.64.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "sharp": "^0.34.4"
+    "sharp": "^0.34.4",
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
