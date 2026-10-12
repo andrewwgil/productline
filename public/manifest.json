@@ -1,7 +1,7 @@
 {
-  "name": "Share to Arcade",
-  "short_name": "Arcade",
-  "description": "See something you love. Get an original, priced Arcade product inspired by it.",
+  "name": "Share to My Arcade",
+  "short_name": "My Arcade",
+  "description": "Share a photo or a post. A surprise product appears in your Arcade account.",
   "start_url": "/share",
   "scope": "/",
   "display": "standalone",

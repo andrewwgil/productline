@@ -85,7 +85,8 @@ body {
   font-size: 13px;
   color: #575c64;
 }
-.field span.sans { font-family: var(--sans); font-style: normal; font-weight: 650; letter-spacing: -0.01em; }
+.field span.sans, .sr { font-family: var(--sans); font-style: normal; font-weight: 650; letter-spacing: -0.01em; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 textarea, select, input[type="url"], input[type="password"] {
   width: 100%;
   margin-top: 6px;
@@ -143,6 +144,8 @@ textarea:focus, select:focus, input:focus { border-color: #5f8b7f; }
 }
 .make:disabled { opacity: 0.5; cursor: default; }
 .make:hover { background: #2c2c2c; }
+.ack { margin: 12px 0 0; font-family: var(--serif); font-size: 18px; line-height: 1.25; letter-spacing: -0.02em; }
+.reveal { margin: 0 0 8px; font-family: var(--serif); font-size: 22px; line-height: 1.15; letter-spacing: -0.03em; }
 
 .progress { margin-top: 16px; }
 .progress ol { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; list-style: none; margin: 0; padding: 0; }

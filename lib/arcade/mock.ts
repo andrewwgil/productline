@@ -62,6 +62,11 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
       return { ...base, options, selections, canManufacture: true } satisfies CategoryDetail;
     }
     case "patterns/create": {
+      const category = body.categoryId ? MOCK_CATEGORIES.find((item) => item.categoryId === body.categoryId) : undefined;
+      const refs = body.referenceIds as unknown[] | undefined;
+      if (category?.world === "jewelry" && ((refs && refs.length > 0) || body.colors || body.modelId)) {
+        throw new Error("jewelry patterns/create takes a prompt and categoryId only");
+      }
       const patternId = "pat_" + id().slice(0, 12);
       const colors = (body.colors as string[]) ?? [];
       const art = svgArt(patternId, colors);
@@ -72,8 +77,11 @@ export async function mockCall(path: string, body: Record<string, unknown>): Pro
     }
     case "patterns/get":
       return store.patterns.get(String(body.patternId)) ?? { patternId: body.patternId, imageUrl: svgArt(String(body.patternId), []) };
-    case "products/create":
+    case "products/create": {
+      const category = MOCK_CATEGORIES.find((item) => item.categoryId === body.categoryId);
+      if (category?.world === "jewelry") throw new Error("products/create refuses a jewelry category");
       return newJob("product", { productId: makeProduct(String(body.patternId), String(body.categoryId), body.selections as Record<string, string>) });
+    }
     case "products/get":
       return store.products.get(String(body.productId)) ?? { productId: body.productId };
     case "references/createUpload":

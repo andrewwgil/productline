@@ -33,24 +33,21 @@ export function inspiredPrompt(userPrompt: string) {
 }
 
 /**
- * Use the requested print category, otherwise the print category whose name the prompt names.
+ * Use the requested category (print or jewelry), otherwise the category whose name the prompt names.
  * Decorative Pillows when nothing matches.
  */
 export function chooseCategory(items: Category[], prompt: string, categoryId?: string | null): Category {
-  const prints = items.filter((item) => item.world === "print");
-  if (!prints.length) throw new Error("Arcade has no print categories right now.");
+  if (!items.length) throw new Error("Arcade has no categories right now.");
   if (categoryId) {
-    const chosen = prints.find((item) => item.categoryId === categoryId);
-    if (chosen) return chosen;
-    const other = items.find((item) => item.categoryId === categoryId);
-    if (other?.world === "jewelry") throw new Error("That category is jewelry. A share becomes an original print, with your image as a style reference.");
-    throw new Error("That category is not available.");
+    const chosen = items.find((item) => item.categoryId === categoryId);
+    if (!chosen) throw new Error("That category is not available.");
+    return chosen;
   }
   const text = prompt.toLowerCase();
   const promptStems = new Set(words(text).map(stem));
   let best: Category | null = null;
   let bestScore = 0;
-  for (const item of prints) {
+  for (const item of items) {
     const name = item.name.toLowerCase();
     let score = 0;
     if (text.includes(name)) score += 12;
@@ -64,9 +61,11 @@ export function chooseCategory(items: Category[], prompt: string, categoryId?: s
     }
   }
   if (best && bestScore > 0) return best;
+  const prints = items.filter((item) => item.world === "print");
   return prints.find((item) => /decorative pillows/i.test(item.name))
     ?? prints.find((item) => /pillow/i.test(item.name))
-    ?? prints[0];
+    ?? prints[0]
+    ?? items[0];
 }
 
 function words(value: string) {

@@ -2,7 +2,7 @@ import Link from "next/link";
 
 const links = [
   { href: "/share", label: "Share" },
-  { href: "/shared", label: "Gallery" },
+  { href: "/shared", label: "My Arcade" },
 ];
 
 export function ShareHeader({ current }: { current: "share" | "gallery" }) {

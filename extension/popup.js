@@ -3,6 +3,7 @@ const CHIPS = [
   { label: "Scarf", prompt: "What would this look like as a silk scarf?", match: /scarf/i },
   { label: "Napkins", prompt: "What would this look like as dinner napkins?", match: /napkin/i },
   { label: "Placemat", prompt: "What would this look like as a placemat?", match: /placemat|place mat|table linen/i },
+  { label: "Ring", prompt: "What would this look like as a ring?", match: /\bring/i },
 ];
 
 const BEATS = [
@@ -71,7 +72,8 @@ $("token").addEventListener("change", () => { saveSettings(); loadCategories(); 
 
 async function loadSettings() {
   if (!hasChrome) {
-    $("backend").value = location.origin.includes("localhost") ? location.origin : DEFAULT_BACKEND;
+    const fromHash = new URLSearchParams(location.hash.replace(/^#/, "")).get("backend");
+    $("backend").value = fromHash || DEFAULT_BACKEND;
     return;
   }
   const saved = await chrome.storage.local.get({ backend: DEFAULT_BACKEND, token: "" });
@@ -83,14 +85,14 @@ async function loadCategories() {
   try {
     const res = await fetch(`${backend()}/api/categories`, { headers: headers() });
     const data = await res.json();
-    categories = (data.categories || []).filter((item) => item.world === "print");
+    categories = data.categories || [];
   } catch {
     categories = [];
   }
   const select = $("category");
   const current = select.value;
-  select.replaceChildren(new Option("Match my prompt", ""));
-  categories.forEach((item) => select.append(new Option(item.name, item.categoryId)));
+  select.replaceChildren(new Option("Surprise me", ""));
+  categories.forEach((item) => select.append(new Option(item.world === "jewelry" ? `${item.name} · jewelry` : item.name, item.categoryId)));
   select.value = [...select.options].some((option) => option.value === current) ? current : "";
 }
 
@@ -102,6 +104,7 @@ function showImage(blob) {
   $("drop").classList.add("has-image");
   $("result").hidden = true;
   $("progress").hidden = true;
+  $("ack").hidden = true;
   $("make").hidden = false;
   share = null;
 }
@@ -176,22 +179,42 @@ $("region").addEventListener("click", async () => {
 });
 
 $("make").addEventListener("click", async () => {
-  if (!file) return fail("Add a photo first.");
+  const link = $("link").value.trim();
+  if (!file && !link) return fail("Add a photo or paste a link.");
   $("error").hidden = true;
   $("make").disabled = true;
+  $("ack").hidden = false;
   try {
-    const body = new FormData();
-    body.set("image", file, file.name || "share.jpg");
-    body.set("prompt", $("prompt").value.trim() || "What would this look like as a pillow?");
-    if ($("category").value) body.set("categoryId", $("category").value);
-    const res = await fetch(`${backend()}/api/share`, { method: "POST", headers: headers(), body });
+    const prompt = $("prompt").value.trim();
+    const categoryId = $("category").value;
+    let res;
+    if (file && !link) {
+      const body = new FormData();
+      body.set("image", file, file.name || "share.jpg");
+      if (prompt) body.set("prompt", prompt);
+      if (categoryId) body.set("categoryId", categoryId);
+      res = await fetch(`${backend()}/api/share`, { method: "POST", headers: headers(), body });
+    } else if (!file) {
+      res = await fetch(`${backend()}/api/share`, {
+        method: "POST",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ url: link, ...(prompt ? { prompt } : {}), ...(categoryId ? { categoryId } : {}) }),
+      });
+    } else {
+      const body = new FormData();
+      body.set("image", file, file.name || "share.jpg");
+      if (prompt) body.set("prompt", prompt);
+      if (categoryId) body.set("categoryId", categoryId);
+      res = await fetch(`${backend()}/api/share`, { method: "POST", headers: headers(), body });
+    }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Could not start that share.");
+    if (!res.ok) throw new Error(data.error || "Could not save that.");
     startedAt = Date.parse(data.createdAt) || Date.now();
     showShare(data);
     poll(data.shareId);
   } catch (err) {
-    fail(err instanceof Error ? err.message : "Could not start that share.");
+    $("ack").hidden = true;
+    fail(err instanceof Error ? err.message : "Could not save that.");
   } finally {
     $("make").disabled = false;
   }
@@ -233,10 +256,15 @@ function showShare(data) {
   }
   if (data.step === "ready") {
     $("progress").hidden = true;
+    $("ack").hidden = true;
     $("result").hidden = false;
+    const reveal = data.reveal || "";
+    $("reveal").hidden = !reveal;
+    $("reveal").textContent = reveal;
+    $("kicker").hidden = Boolean(reveal);
     $("kicker").textContent = data.categoryName || "Product";
-    $("title").textContent = data.title || data.categoryName || "Your product";
-    $("price").textContent = price(data.price);
+    $("title").textContent = reveal ? "" : (data.title || data.categoryName || "Your product");
+    $("price").textContent = reveal ? "" : price(data.price);
     $("product").src = data.imageUrl || "";
     $("product").alt = data.title || "The Arcade product";
     $("open").href = data.arcadeUrl || "https://studio.arcade.ai";

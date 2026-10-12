@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Share to Arcade</title>
+    <title>Share to My Arcade</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header>
-      <p class="mark">Share to Arcade</p>
-      <p class="lede">The photo sets the mood. The product is an original.</p>
+      <p class="mark">Share to My Arcade</p>
+      <p class="lede">One tap. A surprise product lands in your account.</p>
     </header>
 
     <div id="drop" class="drop" tabindex="0">
@@ -26,18 +26,25 @@
     </div>
 
     <label class="field">
-      <span>Inspired by your share</span>
-      <textarea id="prompt" rows="3" maxlength="700">What would this look like as a pillow?</textarea>
+      <span class="sr">Post or page link</span>
+      <input id="link" type="url" spellcheck="false" placeholder="Or paste a post or page link" />
     </label>
 
-    <div class="chips" id="chips"></div>
+    <button type="button" id="make" class="make">Save to My Arcade</button>
+    <p id="ack" class="ack" hidden>Saved to My Arcade. Your surprise is being made.</p>
 
-    <label class="field">
-      <span class="sans">Category</span>
-      <select id="category"><option value="">Match my prompt</option></select>
-    </label>
-
-    <button type="button" id="make" class="make">Make it</button>
+    <details class="settings" id="customize">
+      <summary>Customize</summary>
+      <label class="field">
+        <span>Prompt, if you want one</span>
+        <textarea id="prompt" rows="3" maxlength="700" placeholder="Leave this empty for a surprise"></textarea>
+      </label>
+      <div class="chips" id="chips"></div>
+      <label class="field">
+        <span class="sans">Category</span>
+        <select id="category"><option value="">Surprise me</option></select>
+      </label>
+    </details>
 
     <section id="progress" class="progress" hidden>
       <ol id="beats"></ol>
@@ -47,6 +54,7 @@
     </section>
 
     <article id="result" class="result" hidden>
+      <p id="reveal" class="reveal" hidden></p>
       <p id="kicker" class="kicker"></p>
       <div class="result-top">
         <h2 id="title"></h2>

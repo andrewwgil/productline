@@ -51,16 +51,16 @@ export function Gallery() {
     <main className="min-h-dvh bg-paper text-ink">
       <ShareHeader current="gallery" />
       <div className="mx-auto w-full max-w-3xl px-5 pb-24">
-        <h1 className="mt-4 font-serif text-[clamp(2.6rem,7vw,4.4rem)] font-normal leading-[1.02] tracking-[-0.045em]">Recent shares</h1>
+        <h1 className="mt-4 font-serif text-[clamp(2.6rem,7vw,4.4rem)] font-normal leading-[1.02] tracking-[-0.045em]">My Arcade</h1>
         <p className="mt-4 max-w-lg font-serif text-[1.25rem] italic leading-snug text-subtle">
-          The photo you loved, and the original product it inspired.
+          Newest first. Each surprise names itself when the price is ready.
         </p>
 
         {!shares.length && !error && (
           <div className="mt-16 max-w-md">
             <p className="font-serif text-[1.8rem] leading-tight tracking-[-0.03em]">Nothing here yet.</p>
             <p className="mt-3 text-[15px] leading-relaxed text-muted">When a photo becomes a product, it waits here with its price.</p>
-            <Link href="/share" className="mt-6 inline-flex h-12 items-center rounded-full bg-pill px-5 font-serif text-[17px] text-white">Share a photo</Link>
+            <Link href="/share" className="mt-6 inline-flex h-12 items-center rounded-full bg-pill px-5 font-serif text-[17px] text-white">Share to My Arcade</Link>
           </div>
         )}
 
@@ -69,14 +69,18 @@ export function Gallery() {
             const price = money(share.price);
             return (
               <li key={share.shareId} className="grid gap-5 border-t border-line pt-8 sm:grid-cols-[148px_minmax(0,1fr)_minmax(180px,240px)] sm:items-start">
-                <Link href={`/share?id=${share.shareId}`} className="block">
-                  <img src={share.sourceThumb} alt="" className="aspect-square w-full rounded-[16px] border border-[#e6e5e1] object-cover sm:w-[148px]" />
+                <Link href={`/share?saved=${share.shareId}`} className="block">
+                  {share.sourceThumb ? (
+                    <img src={share.sourceThumb} alt="" className="aspect-square w-full rounded-[16px] border border-[#e6e5e1] object-cover sm:w-[148px]" />
+                  ) : (
+                    <div className="grid aspect-square w-full place-items-center rounded-[16px] border border-dashed border-field bg-white text-sm text-hint sm:w-[148px]">Link</div>
+                  )}
                   <span className="mt-2 block text-[12px] font-semibold tracking-[-0.01em] text-hint">Your share</span>
                 </Link>
                 <div>
                   <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">{LABEL[share.step]}</p>
-                  <h2 className="mt-2 font-serif text-[1.7rem] leading-tight tracking-[-0.03em]">
-                    <Link href={`/share?id=${share.shareId}`} className="hover:underline">{share.prompt}</Link>
+                  <h2 className="mt-2 font-serif text-[1.7rem] leading-[1.15] tracking-[-0.03em]">
+                    <Link href={`/share?saved=${share.shareId}`} className="hover:underline">{share.reveal || share.prompt || "Saved to My Arcade"}</Link>
                   </h2>
                   <p className="mt-2 font-serif text-[15px] italic text-subtle">Inspired by your share{share.categoryName ? ` · ${share.categoryName}` : ""}</p>
                   {share.step === "failed" && share.error && <p className="mt-3 text-sm text-ink">{share.error}</p>}

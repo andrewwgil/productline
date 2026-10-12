@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   title: "Product Line",
   description: "Use your portfolio. Find your product line.",
   manifest: "/manifest.json",
-  appleWebApp: { capable: true, title: "Share to Arcade", statusBarStyle: "default" },
+  appleWebApp: { capable: true, title: "My Arcade", statusBarStyle: "default" },
   icons: { icon: "/icons/icon-192.png", apple: "/icons/icon-180.png" },
 };
 

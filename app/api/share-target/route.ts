@@ -1,7 +1,7 @@
-import { prepareShareImage } from "@/lib/share/image";
+import { after } from "next/server";
 import { json } from "@/lib/share/http";
-import { loadPending, savePending } from "@/lib/share/store";
-import type { PendingShare } from "@/lib/share/types";
+import { createShareFromRequest, followShare, present, ShareInputError } from "@/lib/share/pipeline";
+import { loadPending } from "@/lib/share/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -10,39 +10,21 @@ export const dynamic = "force-dynamic";
 const PENDING_ID = /^pend_[0-9a-f-]{36}$/;
 
 /**
- * Fallback for the PWA share target when the service worker is not controlling the page yet.
- * The worker intercepts this POST and hands the file to /share itself.
+ * PWA share target. Accepts a file, a url, or text that contains a url.
+ * No prompt. Returns immediately; the product is made in the background.
+ * The service worker posts here with X-Share-Direct and reads the JSON.
+ * A navigation POST (worker not installed yet) is redirected to the confirmation.
  */
 export async function POST(req: Request) {
-  let form: FormData;
   try {
-    form = await req.formData();
-  } catch {
-    return json(req, { error: "Share an image." }, 400);
-  }
-  const file = form.get("image") ?? form.get("file");
-  const title = String(form.get("title") ?? "").slice(0, 200);
-  const text = String(form.get("text") ?? "").slice(0, 500);
-  const sharedUrl = String(form.get("url") ?? "").slice(0, 500);
-  if (!(file instanceof File) || file.size <= 0) {
-    return json(req, { error: "Share an image." }, 400);
-  }
-  if (file.size > 12 * 1024 * 1024) return json(req, { error: "That image is too large." }, 400);
-  try {
-    const prepared = await prepareShareImage(Buffer.from(await file.arrayBuffer()));
-    const pending: PendingShare = {
-      id: `pend_${crypto.randomUUID()}`,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
-      dataUrl: `data:image/jpeg;base64,${prepared.imageBase64}`,
-      title,
-      text,
-      url: sharedUrl,
-    };
-    await savePending(pending);
-    return Response.redirect(new URL(`/share?pending=${pending.id}`, req.url), 303);
+    const record = await createShareFromRequest(req);
+    after(() => { void followShare(record.id); });
+    if (req.headers.get("x-share-direct") === "1") return json(req, present(record), 202);
+    return Response.redirect(new URL(`/share?saved=${record.id}`, req.url), 303);
   } catch (err) {
-    return json(req, { error: err instanceof Error ? err.message : "Could not receive that share." }, 400);
+    const status = err instanceof ShareInputError ? err.status : 400;
+    const message = err instanceof Error ? err.message : "Could not receive that share.";
+    return json(req, { error: message }, status);
   }
 }
 

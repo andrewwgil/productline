@@ -3,8 +3,8 @@ import { Suspense } from "react";
 import { ShareApp } from "./share-app";
 
 export const metadata: Metadata = {
-  title: "Share to Arcade",
-  description: "See something you love. Get an original, priced Arcade product inspired by it.",
+  title: "Share to My Arcade",
+  description: "Share a photo or a post. A surprise product appears in your Arcade account.",
 };
 
 export default function SharePage() {

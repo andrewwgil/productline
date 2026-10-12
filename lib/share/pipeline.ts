@@ -1,11 +1,15 @@
-import { ArcadeError, call, getJob, getPattern, getProduct, isArcadeMock, listCategories, rid, startPattern, uploadReferenceImage, type CategoryDetail, type Job } from "@/lib/arcade";
+import { ArcadeError, call, getJob, getPattern, getProduct, isArcadeMock, listCategories, rid, startPattern, uploadReferenceImage, type CategoryDetail, type Job, type World } from "@/lib/arcade";
 import { ARCADE_LIBRARY_URL, arcadeLink, chooseCategory, cropFit, inspiredPrompt, targetRatio, type PatternFit } from "./choose";
-import { bytesFromImageUrl, prepareShareImage } from "./image";
-import { listShares, loadShare, persistence, rememberShare, saveShare } from "./store";
+import { bytesFromImageUrl, prepareShareImage, type PreparedShare } from "./image";
+import { findPageUrl, resolveMainImage } from "./resolve";
+import { listShares, loadShare, persistence, recentSurpriseIds, rememberShare, rememberSurprise, saveShare } from "./store";
+import { autoPrompt, pickSurprise, revealLine } from "./surprise";
+import { money } from "./money";
 import type { ShareRecord, ShareStep, ShareView } from "./types";
 
 const inflight = new Map<string, Promise<ShareRecord | null>>();
 const TERMINAL = new Set<ShareStep>(["ready", "failed"]);
+const WORKING = new Set<ShareStep>(["uploading", "designing", "building"]);
 const SHARE_ID = /^shr_[0-9a-f-]{36}$/;
 
 export class ShareInputError extends Error {
@@ -22,6 +26,10 @@ export function present(record: ShareRecord): ShareView {
     shareId: record.id,
     step: record.step,
     prompt: record.prompt,
+    surprise: Boolean(record.surprise),
+    world: record.world ?? null,
+    reveal: record.reveal ?? null,
+    sourceUrl: record.sourceUrl ?? null,
     categoryId: record.categoryId,
     categoryName: record.categoryName,
     sourceThumb: record.sourceThumb,
@@ -46,7 +54,19 @@ export async function recentShares() {
   return (await listShares()).map(present);
 }
 
-function blank(input: { prompt: string; categoryId: string | null; imageBase64: string; sourceThumb: string }): ShareRecord {
+function blank(input: {
+  prompt: string;
+  surprise: boolean;
+  categoryId: string | null;
+  sourceUrl?: string;
+  allowHost?: string;
+  imageBase64?: string;
+  sourceThumb?: string;
+  width?: number;
+  height?: number;
+  palette?: string[];
+  mood?: string;
+}): ShareRecord {
   const now = new Date().toISOString();
   return {
     id: `shr_${crypto.randomUUID()}`,
@@ -55,19 +75,49 @@ function blank(input: { prompt: string; categoryId: string | null; imageBase64: 
     step: "uploading",
     visited: ["uploading"],
     prompt: input.prompt,
+    surprise: input.surprise,
+    world: null,
     categoryId: input.categoryId,
     categoryName: null,
-    sourceThumb: input.sourceThumb,
+    sourceUrl: input.sourceUrl,
+    allowHost: input.allowHost,
+    sourceThumb: input.sourceThumb ?? "",
     imageBase64: input.imageBase64,
+    width: input.width,
+    height: input.height,
+    palette: input.palette,
+    mood: input.mood,
     retries: 0,
   };
 }
 
-export async function createShare(input: { bytes: Buffer; prompt: string; categoryId?: string | null }) {
-  const prompt = input.prompt.trim().replace(/\s+/g, " ").slice(0, 700);
-  if (!prompt) throw new ShareInputError("Add a short prompt, like “What would this look like as a pillow?”");
-  const prepared = await prepareShareImage(input.bytes);
-  const record = blank({ prompt, categoryId: input.categoryId || null, ...prepared });
+export async function createShare(input: {
+  bytes?: Buffer | null;
+  sourceUrl?: string | null;
+  prompt?: string;
+  categoryId?: string | null;
+  allowHost?: string | null;
+}) {
+  const prompt = (input.prompt ?? "").trim().replace(/\s+/g, " ").slice(0, 700);
+  const categoryId = input.categoryId?.trim() || null;
+  const sourceUrl = input.sourceUrl?.trim() || undefined;
+  if (!input.bytes?.length && !sourceUrl) throw new ShareInputError("Share an image, a screenshot, or a link.");
+  let prepared: PreparedShare | null = null;
+  if (input.bytes?.length) {
+    try {
+      prepared = await prepareShareImage(input.bytes);
+    } catch (err) {
+      throw new ShareInputError(err instanceof Error ? err.message : "Could not read that image.");
+    }
+  }
+  const record = blank({
+    prompt,
+    surprise: !prompt && !categoryId,
+    categoryId,
+    sourceUrl,
+    allowHost: input.allowHost || undefined,
+    ...(prepared ?? {}),
+  });
   await saveShare(record);
   await rememberShare(record.id);
   return record;
@@ -75,35 +125,67 @@ export async function createShare(input: { bytes: Buffer; prompt: string; catego
 
 export async function createShareFromRequest(req: Request) {
   const type = req.headers.get("content-type") || "";
+  const allowHost = req.headers.get("x-forwarded-host") || req.headers.get("host");
   let prompt = "";
   let categoryId: string | null = null;
-  let bytes: Buffer;
+  let sourceUrl: string | null = null;
+  let bytes: Buffer | null = null;
+
   if (type.includes("application/json")) {
-    const body = await req.json().catch(() => ({})) as { prompt?: unknown; categoryId?: unknown; imageUrl?: unknown };
+    const body = await req.json().catch(() => ({})) as {
+      prompt?: unknown; categoryId?: unknown; imageUrl?: unknown; url?: unknown; text?: unknown;
+    };
     prompt = typeof body.prompt === "string" ? body.prompt : "";
     categoryId = typeof body.categoryId === "string" ? body.categoryId : null;
-    if (typeof body.imageUrl !== "string" || !body.imageUrl) throw new ShareInputError("Add an imageUrl or upload an image.");
-    try {
-      bytes = await bytesFromImageUrl(body.imageUrl);
-    } catch (err) {
-      throw new ShareInputError(err instanceof Error ? err.message : "Could not read that image.");
+    const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl : "";
+    const page = findPageUrl(
+      typeof body.url === "string" ? body.url : "",
+      typeof body.text === "string" ? body.text : "",
+      imageUrl,
+    );
+    if (imageUrl.startsWith("data:")) {
+      try { bytes = await bytesFromImageUrl(imageUrl, allowHost); }
+      catch (err) { throw new ShareInputError(err instanceof Error ? err.message : "Could not read that image."); }
+    } else {
+      sourceUrl = page;
     }
   } else {
     let form: FormData;
     try {
       form = await req.formData();
     } catch {
-      throw new ShareInputError("Upload an image or send JSON with imageUrl.");
+      throw new ShareInputError("Share an image or a link.");
     }
     prompt = String(form.get("prompt") ?? "");
     const given = form.get("categoryId");
-    categoryId = typeof given === "string" ? given : null;
+    categoryId = typeof given === "string" && given ? given : null;
     const file = form.get("image") ?? form.get("file");
-    if (!(file instanceof File) || file.size <= 0) throw new ShareInputError("Add an image.");
-    if (file.size > 8 * 1024 * 1024) throw new ShareInputError("That image is too large to upload. It is resized in the browser before it is sent.");
-    bytes = Buffer.from(await file.arrayBuffer());
+    if (file instanceof File && file.size > 0) {
+      if (file.size > 12 * 1024 * 1024) throw new ShareInputError("That image is too large to upload.");
+      bytes = Buffer.from(await file.arrayBuffer());
+    }
+    sourceUrl = findPageUrl(
+      String(form.get("url") ?? ""),
+      String(form.get("text") ?? ""),
+      String(form.get("imageUrl") ?? ""),
+    );
   }
-  return createShare({ bytes, prompt, categoryId });
+
+  return createShare({
+    bytes,
+    sourceUrl: bytes?.length ? null : sourceUrl,
+    prompt,
+    categoryId,
+    allowHost,
+  });
+}
+
+/** Poll Arcade for about a minute. Later GETs resume the same share. */
+export async function followShare(id: string, left = 8) {
+  const record = await tick(id);
+  if (!record || !WORKING.has(record.step) || left <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, isArcadeMock() ? 700 : 4000));
+  await followShare(id, left - 1);
 }
 
 /** One step of the pipeline. Safe to call again: request ids are reused, and a lock skips overlapping runs. */
@@ -144,7 +226,59 @@ async function advance(id: string): Promise<ShareRecord | null> {
   return record;
 }
 
+async function ensureImage(record: ShareRecord) {
+  if (record.imageBase64) return;
+  if (!record.sourceUrl) throw new Error("The share has no image. Share it again.");
+  const bytes = await resolveMainImage(record.sourceUrl, record.allowHost);
+  const prepared = await prepareShareImage(bytes);
+  record.imageBase64 = prepared.imageBase64;
+  record.sourceThumb = prepared.sourceThumb;
+  record.width = prepared.width;
+  record.height = prepared.height;
+  record.palette = prepared.palette;
+  record.mood = prepared.mood;
+  await saveShare(record);
+}
+
+/** Surprise pick, or the category the person named. Jewelry never receives a reference. */
+async function ensureIntent(record: ShareRecord) {
+  if (record.world) return;
+  const categories = await listCategories();
+  const cue = { width: record.width ?? 0, height: record.height ?? 0, palette: record.palette ?? [], mood: record.mood ?? "" };
+  if (record.surprise && !record.categoryId) {
+    const picked = pickSurprise(categories, await recentSurpriseIds(), cue);
+    record.categoryId = picked.categoryId;
+    record.categoryName = picked.name;
+    record.world = picked.world;
+    record.prompt = autoPrompt(picked.name, cue, picked.world === "jewelry");
+    await rememberSurprise(picked.categoryId);
+    await saveShare(record);
+    return;
+  }
+  if (record.categoryId) {
+    const chosen = chooseCategory(categories, record.prompt, record.categoryId);
+    record.categoryId = chosen.categoryId;
+    record.categoryName = chosen.name;
+    record.world = chosen.world;
+    if (!record.prompt.trim()) record.prompt = autoPrompt(chosen.name, cue, chosen.world === "jewelry");
+    await saveShare(record);
+    return;
+  }
+  const chosen = chooseCategory(categories, record.prompt);
+  record.world = chosen.world;
+  record.categoryName = chosen.name;
+  if (chosen.world === "jewelry") record.categoryId = chosen.categoryId;
+  else if (!record.categoryId) record.categoryId = chosen.categoryId;
+  await saveShare(record);
+}
+
 async function uploadAndStart(record: ShareRecord) {
+  await ensureImage(record);
+  await ensureIntent(record);
+  if (record.world === "jewelry") {
+    await startJewelry(record);
+    return;
+  }
   if (!record.referenceId) {
     if (!record.imageBase64) throw new Error("The reference image is missing. Share it again.");
     const bytes = Buffer.from(record.imageBase64, "base64");
@@ -154,7 +288,6 @@ async function uploadAndStart(record: ShareRecord) {
     try {
       record.referenceId = await uploadReferenceImage(bytes, "image/jpeg", { upload: record.uploadRequestId, create: record.refRequestId });
     } catch (err) {
-      // createUpload returns 409 once its upload is saved. A new requestId uploads again; references/create still dedupes.
       if (!(err instanceof ArcadeError) || err.status !== 409) throw err;
       record.uploadRequestId = rid("upl");
       record.refRequestId = rid("ref");
@@ -169,7 +302,25 @@ async function uploadAndStart(record: ShareRecord) {
     const job = await startPattern({
       prompt: inspiredPrompt(record.prompt),
       world: "print",
-      referenceIds: [record.referenceId],
+      referenceIds: [record.referenceId!],
+      requestId: record.patternRequestId,
+    });
+    record.patternJobId = job.jobId;
+  }
+  move(record, "designing");
+  record.retries = 0;
+}
+
+async function startJewelry(record: ShareRecord) {
+  if (!record.categoryId) throw new Error("Jewelry needs a category.");
+  if (!record.patternRequestId) record.patternRequestId = rid("pat");
+  record.imageBase64 = undefined;
+  await saveShare(record);
+  if (!record.patternJobId) {
+    const job = await startPattern({
+      prompt: inspiredPrompt(record.prompt),
+      world: "jewelry",
+      categoryId: record.categoryId,
       requestId: record.patternRequestId,
     });
     record.patternJobId = job.jobId;
@@ -190,18 +341,46 @@ async function design(record: ShareRecord) {
     const patternId = job.result?.patternId;
     if (!patternId) throw new Error("Arcade finished the design without a pattern.");
     record.patternId = String(patternId);
+    if (record.world === "jewelry") {
+      await finishJewelry(record, job.result?.productId);
+      return;
+    }
     await saveShare(record);
+  }
+  if (record.world === "jewelry") {
+    let productId = record.productId;
+    if (!productId && record.patternJobId) {
+      const job = await getJob(record.patternJobId);
+      if (job.status === "running") return;
+      if (job.status === "failed") throw new Error(job.error?.message || "Arcade could not design this.");
+      productId = job.result?.productId ? String(job.result.productId) : undefined;
+    }
+    await finishJewelry(record, productId);
+    return;
   }
   if (!record.productJobId) await startProduct(record);
   move(record, "building");
   record.retries = 0;
 }
 
+async function finishJewelry(record: ShareRecord, productId: unknown) {
+  const id = productId ? String(productId) : "";
+  if (!id) throw new Error("Arcade finished the jewelry design without a product.");
+  record.productId = id;
+  await fillProduct(record);
+  move(record, "ready");
+  record.retries = 0;
+  record.error = undefined;
+  record.warning = undefined;
+}
+
 async function startProduct(record: ShareRecord) {
   const categories = await listCategories();
   const category = chooseCategory(categories, record.prompt, record.categoryId);
+  if (category.world !== "print") throw new Error("That category is jewelry. It is designed with the pattern, not built as a print.");
   record.categoryId = category.categoryId;
   record.categoryName = category.name;
+  record.world = "print" satisfies World;
   const detail = await call<CategoryDetail>("categories/get", { categoryId: category.categoryId, selections: {} });
   if (!detail.canManufacture) throw new Error(`Arcade can't manufacture the default ${category.name} yet.`);
   if (detail.world !== "print") throw new Error("That category is not a print product.");
@@ -261,6 +440,7 @@ async function fillProduct(record: ShareRecord) {
   record.arcadeUrl = arcadeLink(product);
   record.imageFetchedAt = new Date().toISOString();
   if (!record.categoryName) record.categoryName = product.title;
+  if (record.surprise && record.categoryName) record.reveal = revealLine(record.categoryName, money(record.price));
 }
 
 async function refreshReady(record: ShareRecord) {

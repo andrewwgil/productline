@@ -7,16 +7,21 @@ interface MemoryStore {
   shares: Map<string, ShareRecord>;
   order: string[];
   pending: Map<string, PendingShare>;
+  surprises: string[];
 }
 
 const g = globalThis as unknown as { __productlineShares?: MemoryStore };
-const memory = (g.__productlineShares ??= { shares: new Map(), order: [], pending: new Map() });
+const memory = (g.__productlineShares ??= { shares: new Map(), order: [], pending: new Map(), surprises: [] });
+memory.surprises ??= [];
 
 const SHARE_PREFIX = "productline:share:";
 const INDEX_KEY = "productline:shares";
 const PENDING_PREFIX = "productline:pending:";
+const SURPRISE_KEY = "productline:surprise-picks";
 const BLOB_INDEX = "productline/shares/index.json";
+const SURPRISE_BLOB = "productline/shares/surprises.json";
 const MAX_SHARES = 40;
+const MAX_SURPRISES = 3;
 
 export function persistence(): { store: Driver; notice: string | null } {
   if (kvConfig()) return { store: "kv", notice: null };
@@ -121,6 +126,33 @@ export async function listShareIds(): Promise<string[]> {
   if (driver === "kv") return redis<string[]>(["LRANGE", INDEX_KEY, 0, MAX_SHARES - 1]);
   if (driver === "blob") return (await readBlob<{ ids: string[] }>(BLOB_INDEX))?.ids ?? [];
   return memory.order;
+}
+
+/** Category ids of the last surprise picks, newest first. */
+export async function recentSurpriseIds(): Promise<string[]> {
+  const driver = persistence().store;
+  if (driver === "kv") {
+    const ids = await redis<string[]>(["LRANGE", SURPRISE_KEY, 0, MAX_SURPRISES - 1]);
+    return ids ?? [];
+  }
+  if (driver === "blob") return (await readBlob<{ ids: string[] }>(SURPRISE_BLOB))?.ids ?? [];
+  return memory.surprises.slice(0, MAX_SURPRISES);
+}
+
+export async function rememberSurprise(categoryId: string) {
+  const driver = persistence().store;
+  if (driver === "kv") {
+    await redis(["LPUSH", SURPRISE_KEY, categoryId]);
+    await redis(["LTRIM", SURPRISE_KEY, 0, MAX_SURPRISES - 1]);
+    return;
+  }
+  if (driver === "blob") {
+    const current = await readBlob<{ ids: string[] }>(SURPRISE_BLOB) ?? { ids: [] };
+    current.ids = [categoryId, ...current.ids].slice(0, MAX_SURPRISES);
+    await writeBlob(SURPRISE_BLOB, current);
+    return;
+  }
+  memory.surprises = [categoryId, ...memory.surprises].slice(0, MAX_SURPRISES);
 }
 
 export async function listShares(): Promise<ShareRecord[]> {
